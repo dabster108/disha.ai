@@ -158,6 +158,81 @@ function ValidationPanel({ evidence, onRun, running }) {
   );
 }
 
+function RoleFitPanel({ roleFit }) {
+  if (!roleFit) return null;
+  const {
+    target_role,
+    role_category,
+    jobs_considered,
+    jobs_qualified,
+    excluded_for_role_mismatch,
+    avg_role_similarity,
+    differentiation_examples = [],
+  } = roleFit;
+
+  return (
+    <div className="mb-12 rounded-2xl border border-outline-variant bg-surface-container-lowest p-8 mask-reveal">
+      <div className="mb-6 flex items-center gap-3">
+        <Icon name="rule" className="text-primary" filled />
+        <div>
+          <h3 className="text-headline-md text-on-surface">Role &amp; Technical Differentiation</h3>
+          <p className="text-body-md text-secondary">
+            Targeting <span className="font-bold text-on-surface">{target_role}</span>
+            {role_category && (
+              <>
+                {" "}
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-bold uppercase tracking-wide text-primary">
+                  {role_category}
+                </span>
+              </>
+            )}
+            {" "}— adjacent roles and generic keywords (e.g. AI, Manager, Developer) don&apos;t inflate your match.
+          </p>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+        <div className="rounded-xl border border-outline-variant bg-white p-4 text-center">
+          <p className="text-headline-md font-bold text-on-surface">{jobs_considered}</p>
+          <p className="text-xs text-secondary">Postings considered</p>
+        </div>
+        <div className="rounded-xl border border-outline-variant bg-white p-4 text-center">
+          <p className="text-headline-md font-bold text-primary">{jobs_qualified}</p>
+          <p className="text-xs text-secondary">Passed role fit</p>
+        </div>
+        <div className="rounded-xl border border-outline-variant bg-white p-4 text-center">
+          <p className="text-headline-md font-bold text-on-surface">{excluded_for_role_mismatch}</p>
+          <p className="text-xs text-secondary">Excluded — role mismatch</p>
+        </div>
+        <div className="rounded-xl border border-outline-variant bg-white p-4 text-center">
+          <p className="text-headline-md font-bold text-on-surface">
+            {Math.round((avg_role_similarity ?? 0) * 100)}%
+          </p>
+          <p className="text-xs text-secondary">Avg. role similarity</p>
+        </div>
+      </div>
+
+      {differentiation_examples.length > 0 && (
+        <div className="mt-6 rounded-xl border border-outline-variant/60 bg-white p-5">
+          <p className="mb-3 text-label-sm font-bold uppercase tracking-wider text-secondary">
+            Why these didn&apos;t count as matches
+          </p>
+          <div className="space-y-2">
+            {differentiation_examples.map((ex, i) => (
+              <div key={`${ex.title}-${i}`} className="flex items-start gap-2 text-body-md text-on-surface-variant">
+                <Icon name="block" size={16} className="mt-0.5 shrink-0 text-secondary" />
+                <span>
+                  <span className="font-bold text-on-surface">{ex.title}</span> — {ex.reason}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function SkillGapPage() {
   const { profile, profileId } = useProfile();
   const router = useRouter();
@@ -330,6 +405,8 @@ export default function SkillGapPage() {
       )}
 
       <ValidationPanel evidence={gap.evidence} onRun={handleRun} running={running} />
+
+      <RoleFitPanel roleFit={gap.role_fit} />
 
       <div className="grid grid-cols-12 items-start gap-8">
         <section className="col-span-12 space-y-6 mask-reveal lg:col-span-4">

@@ -5,7 +5,125 @@ import Link from "next/link";
 import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import { useProfile } from "@/context/ProfileContext";
-import { getInterviewHistory, getLatestGap, getLatestRoadmap, getPracticeHistory } from "@/lib/api";
+import {
+  getGapHistory,
+  getInterviewHistory,
+  getLatestGap,
+  getLatestRoadmap,
+  getPracticeHistory,
+} from "@/lib/api";
+
+function average(values) {
+  if (!values.length) return null;
+  return values.reduce((sum, v) => sum + v, 0) / values.length;
+}
+
+function Sparkline({ values }) {
+  const max = Math.max(...values, 1);
+  return (
+    <div className="flex h-14 items-end gap-1">
+      {values.map((v, i) => (
+        <div
+          key={i}
+          title={`${Math.round(v)}`}
+          className={`flex-1 rounded-t ${i === values.length - 1 ? "bg-primary" : "bg-primary/30"}`}
+          style={{ height: `${Math.max(6, (v / max) * 100)}%` }}
+        />
+      ))}
+    </div>
+  );
+}
+
+function AnalyticsSection({ gapHistory, interviews, practices }) {
+  const readinessSeries = [...gapHistory]
+    .reverse()
+    .map((snap) => snap.gap_data?.readiness_score)
+    .filter((v) => v != null);
+
+  const readinessDelta =
+    readinessSeries.length >= 2
+      ? readinessSeries[readinessSeries.length - 1] - readinessSeries[0]
+      : null;
+
+  const completedInterviews = interviews.filter((s) => s.status === "completed");
+  const completedPractices = practices.filter((s) => s.status === "completed");
+  const interviewAvg = average(completedInterviews.map((s) => s.overall_score).filter((v) => v != null));
+  const practiceAvg = average(completedPractices.map((s) => s.overall_score).filter((v) => v != null));
+
+  const latestSnapshot = gapHistory[0]?.gap_data;
+  const skillsVerified =
+    (latestSnapshot?.verified_strong_skills?.length ?? 0) +
+    (latestSnapshot?.verified_weak_skills?.length ?? 0);
+
+  const hasAnyData =
+    readinessSeries.length > 0 || completedInterviews.length > 0 || completedPractices.length > 0;
+
+  if (!hasAnyData) return null;
+
+  return (
+    <section className="space-y-8">
+      <div>
+        <h3 className="mb-2 text-headline-md">Your Progress Over Time</h3>
+        <p className="text-body-md text-secondary">
+          Built from your actual skill gap runs, interviews, and practice sessions — not projections.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
+        <div className="rounded-2xl border border-outline-variant bg-white p-6">
+          <div className="mb-3 flex items-center justify-between">
+            <span className="text-label-sm uppercase tracking-wider text-secondary">Readiness Trend</span>
+            {readinessDelta != null && (
+              <span
+                className={`flex items-center gap-1 text-label-sm font-bold ${
+                  readinessDelta >= 0 ? "text-green-600" : "text-error"
+                }`}
+              >
+                <Icon name={readinessDelta >= 0 ? "trending_up" : "trending_down"} size={16} />
+                {readinessDelta >= 0 ? "+" : ""}
+                {Math.round(readinessDelta)}%
+              </span>
+            )}
+          </div>
+          {readinessSeries.length > 0 ? (
+            <Sparkline values={readinessSeries} />
+          ) : (
+            <p className="text-sm text-secondary">Run skill gap analysis more than once to see a trend.</p>
+          )}
+          <p className="mt-3 text-xs text-secondary">
+            {readinessSeries.length} skill gap {readinessSeries.length === 1 ? "run" : "runs"} analyzed
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-outline-variant bg-white p-6">
+          <span className="mb-3 block text-label-sm uppercase tracking-wider text-secondary">
+            Interview Performance
+          </span>
+          <div className="text-headline-lg font-bold text-on-surface">
+            {interviewAvg != null ? `${interviewAvg.toFixed(1)}/10` : "—"}
+          </div>
+          <p className="mt-1 text-sm text-secondary">
+            avg. across {completedInterviews.length} completed{" "}
+            {completedInterviews.length === 1 ? "interview" : "interviews"}
+          </p>
+        </div>
+
+        <div className="rounded-2xl border border-outline-variant bg-white p-6">
+          <span className="mb-3 block text-label-sm uppercase tracking-wider text-secondary">
+            Practice Performance
+          </span>
+          <div className="text-headline-lg font-bold text-on-surface">
+            {practiceAvg != null ? `${practiceAvg.toFixed(1)}/10` : "—"}
+          </div>
+          <p className="mt-1 text-sm text-secondary">
+            avg. across {completedPractices.length} completed{" "}
+            {completedPractices.length === 1 ? "session" : "sessions"} • {skillsVerified} skills verified
+          </p>
+        </div>
+      </div>
+    </section>
+  );
+}
 
 function currentWeekLabel(roadmap) {
   if (!roadmap) return null;
@@ -24,6 +142,7 @@ export default function DashboardPage() {
   const { profile, profileId } = useProfile();
 
   const [gap, setGap] = useState(null);
+  const [gapHistory, setGapHistory] = useState([]);
   const [roadmap, setRoadmap] = useState(null);
   const [interviews, setInterviews] = useState([]);
   const [practices, setPractices] = useState([]);
@@ -35,15 +154,18 @@ export default function DashboardPage() {
 
     async function loadAll() {
       setLoading(true);
-      const [gapResult, roadmapResult, interviewResult, practiceResult] = await Promise.allSettled([
-        getLatestGap(profileId),
-        getLatestRoadmap(profileId),
-        getInterviewHistory(profileId),
-        getPracticeHistory(profileId),
-      ]);
+      const [gapResult, gapHistoryResult, roadmapResult, interviewResult, practiceResult] =
+        await Promise.allSettled([
+          getLatestGap(profileId),
+          getGapHistory(profileId, 8),
+          getLatestRoadmap(profileId),
+          getInterviewHistory(profileId),
+          getPracticeHistory(profileId),
+        ]);
       if (cancelled) return;
 
       setGap(gapResult.status === "fulfilled" ? gapResult.value : null);
+      setGapHistory(gapHistoryResult.status === "fulfilled" ? gapHistoryResult.value : []);
       setRoadmap(roadmapResult.status === "fulfilled" ? roadmapResult.value : null);
       setInterviews(interviewResult.status === "fulfilled" ? interviewResult.value : []);
       setPractices(practiceResult.status === "fulfilled" ? practiceResult.value : []);
@@ -235,6 +357,8 @@ export default function DashboardPage() {
           )}
         </section>
       )}
+
+      <AnalyticsSection gapHistory={gapHistory} interviews={interviews} practices={practices} />
 
       <div className="grid grid-cols-1 gap-8 md:grid-cols-3">
         <div className="rounded-2xl border border-outline-variant bg-white p-6">

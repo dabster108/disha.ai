@@ -41,6 +41,14 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
   const [dishaCaption, setDishaCaption] = useState("");
   const [sttUnavailable, setSttUnavailable] = useState(false);
   const [sessionDurationMinutes, setSessionDurationMinutes] = useState(15);
+  const [messages, setMessages] = useState([]);
+
+  const messageIdRef = useRef(0);
+  const pushMessage = useCallback((role, text, extra = {}) => {
+    if (!text?.trim()) return;
+    messageIdRef.current += 1;
+    setMessages((prev) => [...prev, { id: messageIdRef.current, role, text: text.trim(), ...extra }]);
+  }, []);
 
   const ttsPlayer = useTtsPlayer();
   const ttsUnavailable = ttsPlayer.ttsUnavailable;
@@ -153,33 +161,32 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
       const welcomeRaw =
         typeof window !== "undefined" ? sessionStorage.getItem(welcomeKey) : null;
 
-      setDishaCaption(pendingTurn.question);
-
+      let welcomeMessage = null;
       if (isFresh && welcomeRaw) {
         try {
-          const { welcome_message } = JSON.parse(welcomeRaw);
-          sessionStorage.removeItem(welcomeKey);
-          if (welcome_message) {
-            const combined = `${welcome_message} ${pendingTurn.question}`;
-            if (!muted) {
-              await speakThenListen(combined);
-              return;
-            }
-            setDishaCaption(combined);
-          }
+          welcomeMessage = JSON.parse(welcomeRaw).welcome_message || null;
         } catch {
-          // ignore malformed storage
+          welcomeMessage = null;
         }
+        sessionStorage.removeItem(welcomeKey);
       }
 
+      // Speak welcome + question as one continuous utterance, but render them
+      // as two separate chat bubbles so the thread reads naturally.
+      if (welcomeMessage) pushMessage("disha", welcomeMessage, { kind: "welcome" });
+      pushMessage("disha", pendingTurn.question, { kind: "question" });
+
+      const speech = welcomeMessage ? `${welcomeMessage} ${pendingTurn.question}` : pendingTurn.question;
+      setDishaCaption(speech);
+
       if (!muted) {
-        await speakThenListen(pendingTurn.question);
+        await speakThenListen(speech);
       } else {
         setSessionState("listening");
         resumeTimersForListen();
       }
     },
-    [muted, resumeTimersForListen, router, sessionId, speakThenListen]
+    [muted, pushMessage, resumeTimersForListen, router, sessionId, speakThenListen]
   );
 
   const ensureMicOrTextMode = useCallback(async () => {
@@ -202,6 +209,11 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
 
   const init = useCallback(async () => {
     if (!sessionId || !profileId || initDoneRef.current) return;
+    // Set the guard synchronously, before any await, so a second concurrent
+    // invocation (e.g. React StrictMode's dev-mode double-invoke of mount
+    // effects) can never race past this check — otherwise both calls reach
+    // runInitialFlow() and DISHA's welcome/question gets spoken twice.
+    initDoneRef.current = true;
     setSessionState("loading");
     setError(null);
 
@@ -215,7 +227,26 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
       setSession(data.session);
       setCurrentTurn(data.currentTurn);
       setSessionStartTime(new Date(data.session.started_at).getTime());
-      initDoneRef.current = true;
+
+      const answeredTurns = [...data.session.turns]
+        .sort((a, b) => a.turn_index - b.turn_index)
+        .filter((t) => t.answer != null);
+      const historyMessages = [];
+      let historyId = 0;
+      for (const t of answeredTurns) {
+        historyMessages.push({ id: `h${historyId++}`, role: "disha", kind: "question", text: t.question });
+        historyMessages.push({ id: `h${historyId++}`, role: "user", kind: "answer", text: t.answer });
+        if (t.feedback != null && t.score != null) {
+          historyMessages.push({
+            id: `h${historyId++}`,
+            role: "disha",
+            kind: "feedback",
+            text: `Score ${t.score}/10 — ${t.feedback}`,
+            score: t.score,
+          });
+        }
+      }
+      if (historyMessages.length > 0) setMessages(historyMessages);
 
       const elapsedMs = Date.now() - new Date(data.session.started_at).getTime();
       const totalSessionMs = prefs.minutes * 60 * 1000;
@@ -269,6 +300,7 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
   const submitAnswer = useCallback(
     async (answerText) => {
       if (!answerText?.trim() || !sessionId) return;
+      pushMessage("user", answerText.trim(), { kind: "answer" });
       setSubmitting(true);
       setError(null);
       setSessionState("evaluating");
@@ -282,13 +314,19 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
         setTranscript(answerText.trim());
 
         const feedbackText = `Score ${result.evaluated_turn.score} out of 10. ${result.evaluated_turn.feedback}`;
+        pushMessage(
+          "disha",
+          `Score ${result.evaluated_turn.score}/10 — ${result.evaluated_turn.feedback}`,
+          { kind: "feedback", score: result.evaluated_turn.score }
+        );
 
         if (result.interview_completed) {
           setNextTurn(null);
           setSessionState("feedback");
 
-          const closing =
-            `${feedbackText} That wraps up your mock interview. Let's review your report.`;
+          const closingLine = "That wraps up your mock interview. Let's review your report.";
+          pushMessage("disha", closingLine, { kind: "closing" });
+          const closing = `${feedbackText} ${closingLine}`;
 
           if (!muted) {
             await playTts(closing);
@@ -318,6 +356,7 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
 
         if (autoContinue && result.next_question) {
           if (!muted) {
+            pushMessage("disha", result.next_question.question, { kind: "question" });
             setCurrentTurn(result.next_question);
             setEvaluated(null);
             setNextTurn(null);
@@ -345,6 +384,7 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
       muted,
       pauseTimersForSpeech,
       playTts,
+      pushMessage,
       resumeTimersForListen,
       router,
       sessionId,
@@ -367,6 +407,7 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
         return;
       }
 
+      pushMessage("disha", turn.question, { kind: "question" });
       setCurrentTurn(turn);
       setEvaluated(null);
       setNextTurn(null);
@@ -381,7 +422,7 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
         setSessionState("listening");
       }
     },
-    [muted, nextTurn, resumeTimersForListen, router, sessionId, speakThenListen]
+    [muted, nextTurn, pushMessage, resumeTimersForListen, router, sessionId, speakThenListen]
   );
 
   continueFromFeedbackRef.current = continueFromFeedback;
@@ -529,7 +570,9 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
   const handleTextSubmit = useCallback(
     async (e) => {
       e?.preventDefault?.();
-      await submitAnswer(textAnswer);
+      const text = textAnswer;
+      setTextAnswer("");
+      await submitAnswer(text);
     },
     [submitAnswer, textAnswer]
   );
@@ -576,6 +619,7 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
     setMuted: ttsPlayer.setMuted,
     dishaCaption,
     liveUserCaption,
+    messages,
     recorder,
     playTts,
     abortSpeaking,
