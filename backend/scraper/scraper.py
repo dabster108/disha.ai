@@ -238,6 +238,7 @@ async def _scrape_kumarijob(*, max_jobs: int | None = None) -> list[JobPosting]:
 
 async def _kumarijob_collect_listings(*, max_jobs: int | None) -> list[dict]:
     seen_urls: set[str] = set()
+    seen_job_ids: set[str] = set()
     listings: list[dict] = []
 
     for page_url in KUMARIJOB_LISTING_PAGES:
@@ -248,9 +249,14 @@ async def _kumarijob_collect_listings(*, max_jobs: int | None) -> list[dict]:
             if not link:
                 continue
             source_url = clean_text(link.get("href"))
-            if not source_url or source_url in seen_urls:
+            job_id = card.get("data-jobid")
+            # Same job can appear with two href variants (raw vs. slugified
+            # company name) — the data-jobid is the real identity, dedupe on it.
+            if not source_url or source_url in seen_urls or (job_id and job_id in seen_job_ids):
                 continue
             seen_urls.add(source_url)
+            if job_id:
+                seen_job_ids.add(job_id)
 
             title = clean_text(link.get("title") or link.get_text(" ", strip=True))
             company_el = card.select_one(".featured-job-company-name")
@@ -286,7 +292,9 @@ async def _kumarijob_detail(listing: dict) -> JobPosting:
     salary_range = extract_salary_from_text(soup.get_text(" ", strip=True))
     skills = [
         clean_text(node.get_text(" ", strip=True))
-        for node in soup.select(".skill-labels-list .skill-label, .skill-labels-list li, .skill-labels-list a")
+        for node in soup.select(
+            ".skill-pill-tag, .skill-labels-list .skill-label, .skill-labels-list li, .skill-labels-list a"
+        )
     ]
     description = _kumarijob_description(soup)
     skills = merge_skills(dedupe_preserve_order(skills), description=description)
@@ -304,6 +312,11 @@ async def _kumarijob_detail(listing: dict) -> JobPosting:
 
 
 def _kumarijob_location(soup: BeautifulSoup) -> str:
+    icon = soup.select_one("i.fa-map-marker-alt, i.fa-map-marker")
+    if icon and icon.parent:
+        text = clean_text(icon.parent.get_text(" ", strip=True))
+        if text:
+            return text
     for li in soup.select(".job-info-list li"):
         text = clean_text(li.get_text(" ", strip=True))
         if text.lower().startswith(("category:", "expiry", "no. of openings")):
@@ -315,7 +328,7 @@ def _kumarijob_location(soup: BeautifulSoup) -> str:
 
 def _kumarijob_description(soup: BeautifulSoup) -> str:
     parts: list[str] = []
-    for selector in (".job-description", ".job-detail", ".job-content", ".job-info-list"):
+    for selector in (".rich-text-content", ".job-description", ".job-detail", ".job-content", ".job-info-list"):
         for node in soup.select(selector):
             text = clean_text(node.get_text(" ", strip=True))
             if text:
@@ -829,6 +842,22 @@ def dedupe_jobs(jobs: list[JobPosting]) -> tuple[list[JobPosting], int]:
                 })
             by_url[key] = job
     kept = [by_url[key] for key in order]
+
+    # Defense in depth: a single source can occasionally emit the same
+    # posting id under two href variants that don't normalize to the same
+    # URL (e.g. an unslugified vs. slugified company name). Chroma requires
+    # globally unique ids, so collapse any remaining id collisions too.
+    by_id: dict[str, JobPosting] = {}
+    id_order: list[str] = []
+    for job in kept:
+        existing = by_id.get(job.id)
+        if existing is None:
+            by_id[job.id] = job
+            id_order.append(job.id)
+        elif _completeness(job) > _completeness(existing):
+            by_id[job.id] = job
+    kept = [by_id[jid] for jid in id_order]
+
     return kept, len(jobs) - len(kept)
 
 

@@ -27,6 +27,7 @@ from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
 from app.db.models import InterviewSession, PracticeSession, StudentProfile
+from app.rag.documents import infer_role_category
 from app.rag.retriever import search_jobs
 from app.services.llm_utils import call_structured
 
@@ -500,10 +501,48 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
         }
 
     priority_skill_names = [row["skill"] for row in priority_learn[:5]]
-    from app.services.job_matching import rank_jobs_for_student
+    from app.services.job_matching import rank_jobs_for_student, score_job
 
     # Reuse the pool retrieved above — no second Chroma search.
     ranked_jobs = rank_jobs_for_student(ctx, prefetched=job_pool)
+
+    # Role & technical differentiation — surfaces job_matching.py's role-conflict
+    # logic (e.g. backend != frontend, AI engineer != instructor) so the student
+    # can see *why* adjacent-but-different postings weren't counted as matches,
+    # instead of match_score alone quietly excluding them.
+    role_category = infer_role_category(profile.target_role, claimed_skills)
+    all_scored = [score_job(j, ctx) for j in job_pool]
+    role_mismatched = [
+        row
+        for row in all_scored
+        if not row["passes_thresholds"]
+        and row["factors"]["role_similarity"] < settings.job_match_min_role_similarity
+    ]
+    role_mismatched.sort(key=lambda r: r["factors"]["role_similarity"])
+    differentiation_examples = [
+        {
+            "title": row["title"],
+            "role_similarity": row["factors"]["role_similarity"],
+            "domain_match": row["factors"]["domain_match"],
+            "reason": (
+                f"Adjacent title but low role fit ({round(row['factors']['role_similarity'] * 100)}%) "
+                f"for {profile.target_role} — not counted as a match."
+            ),
+        }
+        for row in role_mismatched[:3]
+    ]
+    qualified_role_sims = [row["factors"]["role_similarity"] for row in ranked_jobs] or [0.0]
+    qualified_domain_matches = [row["factors"]["domain_match"] for row in ranked_jobs] or [0.0]
+    role_fit = {
+        "target_role": profile.target_role,
+        "role_category": role_category,
+        "jobs_considered": len(job_pool),
+        "jobs_qualified": len(ranked_jobs),
+        "excluded_for_role_mismatch": len(role_mismatched),
+        "avg_role_similarity": round(sum(qualified_role_sims) / len(qualified_role_sims), 2),
+        "avg_domain_match": round(sum(qualified_domain_matches) / len(qualified_domain_matches), 2),
+        "differentiation_examples": differentiation_examples,
+    }
 
     has_interview = ctx.interview is not None
     has_practice = ctx.practice is not None
@@ -572,6 +611,7 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
         "match_ratio": match_ratio,
         "readiness_score": readiness_score,
         "evidence": evidence,
+        "role_fit": role_fit,
         "sources_used": {
             "profile": True,
             "market": True,
@@ -600,6 +640,8 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
                 "missing_skills": job.get("missing_skills", []),
                 "relaxed_match": job.get("relaxed_match", False),
                 "explanation": job.get("explanation"),
+                "role_similarity": job.get("factors", {}).get("role_similarity"),
+                "domain_match": job.get("factors", {}).get("domain_match"),
             }
             for job in ranked_jobs
         ],
