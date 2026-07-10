@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.db.models import StudentProfile
+from app.services.llm_utils import call_structured
 from scraper.normalize import TECH_KEYWORDS
 
 # Tech role names (whole-string match) reused/aligned with the interview service.
@@ -37,8 +38,15 @@ TRACK_TECH_ROLES = {
     "android developer",
     "ios developer",
 }
-# TECH_KEYWORDS is the scraper's canonical tech-skill vocabulary; casefold once.
-_TECH_SKILLS = {kw.casefold() for kw in TECH_KEYWORDS}
+# scraper.TECH_KEYWORDS is a broad *job-skills* list — it also carries soft/
+# business skills (communication, digital marketing, seo, accounting, …). For
+# TRACK detection we want genuinely technical skills only, so subtract those.
+_NON_TECH_KEYWORDS = {
+    "excel", "power bi", "tableau", "salesforce", "figma", "photoshop", "illustrator",
+    "seo", "digital marketing", "content writing", "communication", "negotiation",
+    "accounting", "tally", "sap", "project management", "agile", "scrum",
+}
+_TECH_SKILLS = {kw.casefold() for kw in TECH_KEYWORDS} - _NON_TECH_KEYWORDS
 # Skills whose natural challenge is a coding task vs a written/pseudo-code answer.
 _CODING_LANGS = {
     "python": "python",
@@ -83,6 +91,24 @@ def choose_difficulty(profile: StudentProfile) -> Literal["easy", "medium", "har
     if years >= 1:
         return "medium"
     return "easy"
+
+
+def adapt_difficulty(previous_score: float) -> Literal["easy", "medium", "hard"]:
+    """Difficulty for the next challenge, based on how the last one scored."""
+    if previous_score < 5:
+        return "easy"
+    if previous_score <= 7:
+        return "medium"
+    return "hard"
+
+
+def skill_level_for_score(score: float) -> Literal["weak", "partial", "strong"]:
+    """Verified skill level, derived from score so it never contradicts it."""
+    if score >= 7:
+        return "strong"
+    if score >= 4:
+        return "partial"
+    return "weak"
 
 
 def suggest_skills(profile: StudentProfile, *, limit: int = 5) -> tuple[list[str], str]:
@@ -148,6 +174,10 @@ def _llm() -> ChatGroq:
     return ChatGroq(model=settings.practice_groq_model, temperature=0.2, api_key=settings.groq_api_key)
 
 
+async def _structured(schema, prompt: str, *, attempts: int = 2):
+    return await call_structured(_llm(), schema, prompt, attempts=attempts)
+
+
 def profile_context(profile: StudentProfile) -> str:
     return (
         f"Target role: {profile.target_role}\n"
@@ -175,15 +205,14 @@ async def generate_coding_challenge(
         f"Difficulty: {difficulty}\n"
         f"Candidate profile:\n{profile_context(profile)}"
     )
-    try:
-        challenge = await _llm().with_structured_output(CodingChallenge).ainvoke(prompt)
-        challenge.skill_tag = skill
-        challenge.difficulty = difficulty  # type: ignore[assignment]
-        if not challenge.expected_language:
-            challenge.expected_language = language
-        return challenge
-    except Exception:
+    challenge = await _structured(CodingChallenge, prompt)
+    if challenge is None:
         return fallback_coding_challenge(skill, difficulty, language)
+    challenge.skill_tag = skill
+    challenge.difficulty = difficulty  # type: ignore[assignment]
+    if not challenge.expected_language:
+        challenge.expected_language = language
+    return challenge
 
 
 async def generate_scenario_challenge(
@@ -196,13 +225,12 @@ async def generate_scenario_challenge(
         f"Difficulty: {difficulty}\n"
         f"Candidate profile:\n{profile_context(profile)}"
     )
-    try:
-        challenge = await _llm().with_structured_output(ScenarioChallenge).ainvoke(prompt)
-        challenge.skill_tag = skill
-        challenge.difficulty = difficulty  # type: ignore[assignment]
-        return challenge
-    except Exception:
+    challenge = await _structured(ScenarioChallenge, prompt)
+    if challenge is None:
         return fallback_scenario_challenge(profile, skill, difficulty)
+    challenge.skill_tag = skill
+    challenge.difficulty = difficulty  # type: ignore[assignment]
+    return challenge
 
 
 def fallback_coding_challenge(skill: str, difficulty: str, language: str) -> CodingChallenge:
@@ -273,10 +301,10 @@ async def evaluate_submission(
         f"What a good answer includes: {', '.join(evaluation_hints) or 'N/A'}\n\n"
         f"{submission}"
     )
-    try:
-        return await _llm().with_structured_output(ChallengeEvaluation).ainvoke(eval_prompt)
-    except Exception:
+    evaluation = await _structured(ChallengeEvaluation, eval_prompt)
+    if evaluation is None:
         return fallback_evaluation(challenge_type, code, explanation, answer)
+    return evaluation
 
 
 def fallback_evaluation(
@@ -327,18 +355,19 @@ async def summarize_session(
         f"Strong: {strong or 'none'}\n"
         f"Weak: {weak or 'none'}"
     )
-    try:
-        result = await _llm().with_structured_output(PracticeSummaryResult).ainvoke(prompt)
+    result = await _structured(PracticeSummaryResult, prompt)
+    if result is not None:
         return result.summary
-    except Exception:
-        if strong and weak:
-            return (
-                f"You verified strong {', '.join(strong)} for the {profile.target_role} path, "
-                f"while {', '.join(weak)} still need work. Focus your next practice on the weaker skills."
-            )
-        if strong:
-            return f"Solid session — you verified {', '.join(strong)}. Keep practising to raise the difficulty."
+
+    # Fallback summary when Groq is unavailable.
+    if strong and weak:
         return (
-            f"This session flagged {', '.join(weak) or 'several skills'} as areas to improve for the "
-            f"{profile.target_role} path. Practise these and retry to verify progress."
+            f"You verified strong {', '.join(strong)} for the {profile.target_role} path, "
+            f"while {', '.join(weak)} still need work. Focus your next practice on the weaker skills."
         )
+    if strong:
+        return f"Solid session — you verified {', '.join(strong)}. Keep practising to raise the difficulty."
+    return (
+        f"This session flagged {', '.join(weak) or 'several skills'} as areas to improve for the "
+        f"{profile.target_role} path. Practise these and retry to verify progress."
+    )
