@@ -134,12 +134,10 @@ async def start_interview(
     db.add_all([session, first_turn])
     await db.commit()
 
-    session = await _get_session_with_turns_or_404(db, session.id)
-    turns = _sort_turns(session)
     return InterviewStartResponse(
         session=InterviewSessionOut.model_validate(session),
         welcome_message=welcome_message,
-        next_question=InterviewTurnOut.model_validate(turns[0]),
+        next_question=InterviewTurnOut.model_validate(first_turn),
     )
 
 
@@ -175,7 +173,7 @@ async def answer_interview(
     }
     session.difficulty = evaluation.suggested_difficulty
 
-    next_turn_out: InterviewTurnOut | None = None
+    next_turn: InterviewTurn | None = None
     interview_completed = current_turn.turn_index >= MAX_QUESTION_TURNS
 
     if interview_completed:
@@ -189,31 +187,25 @@ async def answer_interview(
     else:
         next_question = await generate_next_question(profile, session, turns, evaluation)
         next_turn = InterviewTurn(
-            session_id=session.id,
             turn_index=current_turn.turn_index + 1,
             question=next_question.question,
             question_type=next_question.question_type,
             skill_tag=next_question.skill_tag,
             difficulty=next_question.difficulty,
         )
+        # Attach via the relationship (not just session_id) so session.turns
+        # reflects it immediately — with expire_on_commit=False, a bare FK
+        # column leaves the already-loaded collection stale after commit.
+        next_turn.session = session
         db.add(next_turn)
 
     await db.commit()
-    session = await _get_session_with_turns_or_404(db, session.id)
-    turns = _sort_turns(session)
-    evaluated_turn = next(turn for turn in turns if turn.turn_index == current_turn.turn_index)
-    pending_turn = next((turn for turn in turns if turn.answer is None), None)
-    if pending_turn is not None:
-        next_turn_out = InterviewTurnOut.model_validate(pending_turn)
-    elif session.status != "completed":
-        raise HTTPException(
-            status_code=500,
-            detail="Interview answer was saved but no next question is available for this session.",
-        )
+
+    next_turn_out = InterviewTurnOut.model_validate(next_turn) if next_turn is not None else None
 
     return InterviewAnswerResponse(
         session=InterviewSessionOut.model_validate(session),
-        evaluated_turn=InterviewTurnOut.model_validate(evaluated_turn),
+        evaluated_turn=InterviewTurnOut.model_validate(current_turn),
         next_question=next_turn_out,
         interview_completed=session.status == "completed",
     )

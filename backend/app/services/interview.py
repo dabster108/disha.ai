@@ -2,11 +2,12 @@ from __future__ import annotations
 
 from typing import Literal
 
-from langchain_groq import ChatGroq
+from langchain_mistralai import ChatMistralAI
 from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.db.models import InterviewSession, InterviewTurn, StudentProfile
+from app.services.llm_utils import call_structured
 
 TRACK_TECH_ROLES = {
     "backend developer",
@@ -256,9 +257,9 @@ def build_turn_context(turns: list[InterviewTurn]) -> str:
     return "\n\n".join(parts)
 
 
-def _llm() -> ChatGroq:
+def _llm() -> ChatMistralAI:
     settings = get_settings()
-    return ChatGroq(model=settings.groq_model, temperature=0.2, api_key=settings.groq_api_key)
+    return ChatMistralAI(model=settings.interview_mistral_model, temperature=0.2, api_key=settings.mistral_api_key2)
 
 
 async def generate_opening_question(profile: StudentProfile, track: str, difficulty: str) -> NextQuestion:
@@ -271,10 +272,8 @@ async def generate_opening_question(profile: StudentProfile, track: str, difficu
         f"Difficulty: {difficulty}\n"
         f"Candidate profile:\n{build_profile_context(profile)}"
     )
-    try:
-        return await _llm().with_structured_output(NextQuestion).ainvoke(prompt)
-    except Exception:
-        return fallback_opening_question(profile, difficulty)
+    result = await call_structured(_llm(), NextQuestion, prompt)
+    return result if result is not None else fallback_opening_question(profile, difficulty)
 
 
 async def evaluate_answer(
@@ -297,10 +296,8 @@ async def evaluate_answer(
         f"Current question:\n{current_turn.question}\n\n"
         f"Candidate answer:\n{answer}"
     )
-    try:
-        return await _llm().with_structured_output(AnswerEvaluation).ainvoke(prompt)
-    except Exception:
-        return fallback_evaluation(answer, current_turn.difficulty)
+    result = await call_structured(_llm(), AnswerEvaluation, prompt)
+    return result if result is not None else fallback_evaluation(answer, current_turn.difficulty)
 
 
 async def generate_next_question(
@@ -325,10 +322,8 @@ async def generate_next_question(
         f"Candidate profile:\n{build_profile_context(profile)}\n\n"
         f"Interview so far:\n{build_turn_context(turns)}"
     )
-    try:
-        return await _llm().with_structured_output(NextQuestion).ainvoke(prompt)
-    except Exception:
-        return fallback_next_question(profile, session.track, next_turn_index, evaluation)
+    result = await call_structured(_llm(), NextQuestion, prompt)
+    return result if result is not None else fallback_next_question(profile, session.track, next_turn_index, evaluation)
 
 
 async def summarize_session(
@@ -345,17 +340,18 @@ async def summarize_session(
         f"Candidate profile:\n{build_profile_context(profile)}\n\n"
         f"Interview transcript:\n{build_turn_context(turns)}"
     )
-    try:
-        return await _llm().with_structured_output(InterviewSummary).ainvoke(prompt)
-    except Exception:
-        scores = [turn.score for turn in turns if turn.score is not None]
-        overall = round(sum(scores) / max(len(scores), 1), 2)
-        return InterviewSummary(
-            overall_score=overall,
-            summary=(
-                f"You completed an adaptive interview for the {profile.target_role} role. "
-                "Keep improving answer depth, structure, and role-specific examples."
-            ),
-            strengths=["Stayed relevant to the role"] if overall >= 5 else [],
-            weaknesses=["Needs more concrete examples and clearer explanation"],
-        )
+    result = await call_structured(_llm(), InterviewSummary, prompt)
+    if result is not None:
+        return result
+
+    scores = [turn.score for turn in turns if turn.score is not None]
+    overall = round(sum(scores) / max(len(scores), 1), 2)
+    return InterviewSummary(
+        overall_score=overall,
+        summary=(
+            f"You completed an adaptive interview for the {profile.target_role} role. "
+            "Keep improving answer depth, structure, and role-specific examples."
+        ),
+        strengths=["Stayed relevant to the role"] if overall >= 5 else [],
+        weaknesses=["Needs more concrete examples and clearer explanation"],
+    )

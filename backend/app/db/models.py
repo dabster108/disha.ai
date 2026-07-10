@@ -47,6 +47,7 @@ class StudentProfile(Base):
     roadmaps: Mapped[list[Roadmap]] = relationship(back_populates="profile")
     interview_sessions: Mapped[list[InterviewSession]] = relationship(back_populates="profile")
     practice_sessions: Mapped[list[PracticeSession]] = relationship(back_populates="profile")
+    skill_gap_snapshots: Mapped[list[SkillGapSnapshot]] = relationship(back_populates="profile")
 
 
 class Roadmap(Base):
@@ -88,6 +89,7 @@ class InterviewSession(Base):
 
 class InterviewTurn(Base):
     __tablename__ = "interview_turns"
+    __table_args__ = (UniqueConstraint("session_id", "turn_index", name="uq_interview_turns_session_turn_index"),)
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("interview_sessions.id"))
@@ -164,6 +166,30 @@ class PracticeChallenge(Base):
     answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     session: Mapped[PracticeSession] = relationship(back_populates="challenges")
+
+
+class SkillGapSnapshot(Base):
+    """Point-in-time merge of profile + market + interview + practice signals.
+
+    Multiple snapshots per profile are kept (history); the gap API returns the
+    latest by default. ``gap_data`` is the full computed payload (see
+    app/services/skill_gap.py) — the flattened columns exist for fast filtering.
+    """
+
+    __tablename__ = "skill_gap_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("student_profiles.id"))
+    target_role: Mapped[str] = mapped_column(String(255))
+    interview_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("interview_sessions.id"), nullable=True)
+    practice_session_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("practice_sessions.id"), nullable=True)
+    jobs_analyzed: Mapped[int] = mapped_column(Integer, default=0)
+    match_ratio: Mapped[float] = mapped_column(Float, default=0.0)
+    gap_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    narrative_summary: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    profile: Mapped[StudentProfile] = relationship(back_populates="skill_gap_snapshots")
 
 
 class ScrapeRun(Base):

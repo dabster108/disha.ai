@@ -22,11 +22,13 @@ from app.api.deps import get_db
 from app.config import get_settings
 from app.db.models import PracticeChallenge, PracticeSession, StudentProfile
 from app.services.practice import (
+    adapt_difficulty,
     choose_difficulty,
     detect_track,
     evaluate_submission,
     generate_coding_challenge,
     generate_scenario_challenge,
+    skill_level_for_score,
     suggest_skills,
     summarize_session,
 )
@@ -214,11 +216,11 @@ async def start(payload: StartRequest, db: AsyncSession = Depends(get_db)) -> St
     )
     db.add(session)
 
-    # One challenge per skill, generated up front so the client sees total_challenges.
-    for index, skill in enumerate(skills):
-        challenge = await _build_challenge(profile, track, skill, difficulty, index)
-        challenge.session = session
-        db.add(challenge)
+    # Challenges are generated lazily (first now, each next on submit) so one
+    # request never fires N Groq calls — faster start, no rate-limit pileup.
+    first = await _build_challenge(profile, track, skills[0], difficulty, 0)
+    first.session = session
+    db.add(first)
 
     await db.commit()
     session = await _get_session_or_404(db, session.id)
@@ -228,7 +230,7 @@ async def start(payload: StartRequest, db: AsyncSession = Depends(get_db)) -> St
         track=track,  # type: ignore[arg-type]
         difficulty=difficulty,  # type: ignore[arg-type]
         pass_threshold=session.pass_threshold,
-        total_challenges=len(challenges),
+        total_challenges=len(skills),
         current_challenge=ChallengeOut.model_validate(challenges[0]),
     )
 
@@ -266,12 +268,15 @@ async def submit(session_id: uuid.UUID, payload: SubmitRequest, db: AsyncSession
 
     score = round(evaluation.score, 2)
     passed = score >= session.pass_threshold
+    # Derive level from score so it can't contradict the number (the 8b model
+    # occasionally returns e.g. score 8 with level "weak").
+    verified_level = skill_level_for_score(score)
     challenge.answer_code = payload.code.strip() if payload.code else None
     challenge.answer_text = payload.answer.strip() if payload.answer else None
     challenge.explanation = payload.explanation.strip() if payload.explanation else None
     challenge.score = score
     challenge.passed = passed
-    challenge.verified_skill_level = evaluation.verified_skill_level
+    challenge.verified_skill_level = verified_level
     challenge.feedback = evaluation.feedback
     challenge.dimensions = {
         "scores": evaluation.dimensions,
@@ -280,19 +285,28 @@ async def submit(session_id: uuid.UUID, payload: SubmitRequest, db: AsyncSession
     }
     challenge.answered_at = datetime.now(timezone.utc)
 
-    remaining = [c for c in challenges if c.id != challenge.id and c.score is None]
-    next_challenge = min(remaining, key=lambda c: c.challenge_index) if remaining else None
+    profile = await _get_profile_or_404(db, session.profile_id)
+    skills = session.skills_selected or []
+    next_index = challenge.challenge_index + 1
+    next_challenge: PracticeChallenge | None = None
 
-    session_out: SessionOut | None = None
-    if next_challenge is None:
-        answered = [c for c in challenges]
+    if next_index < len(skills):
+        # Adapt the next challenge's difficulty to how this one scored.
+        next_difficulty = adapt_difficulty(score)
+        next_challenge = await _build_challenge(
+            profile, session.track, skills[next_index], next_difficulty, next_index
+        )
+        # Attach via relationship so session.challenges stays consistent after
+        # commit (expire_on_commit=False keeps these objects usable, no re-fetch).
+        next_challenge.session = session
+        db.add(next_challenge)
+    else:
+        answered = _sorted_challenges(session)
         skill_scores = {c.skill: c.score for c in answered if c.score is not None}
         strong = sorted({c.skill for c in answered if c.passed})
         weak = sorted({c.skill for c in answered if c.passed is False})
         overall = round(sum(skill_scores.values()) / max(len(skill_scores), 1), 2)
-        summary_text = await summarize_session(
-            await _get_profile_or_404(db, session.profile_id), skill_scores, strong, weak
-        )
+        summary_text = await summarize_session(profile, skill_scores, strong, weak)
         session.status = "completed"
         session.overall_score = overall
         session.verified_strong_skills = strong
@@ -302,19 +316,14 @@ async def submit(session_id: uuid.UUID, payload: SubmitRequest, db: AsyncSession
         session.finished_at = datetime.now(timezone.utc)
 
     await db.commit()
-    session = await _get_session_or_404(db, session.id)
-    if session.status == "completed":
-        session_out = SessionOut.model_validate(session)
 
-    next_out = None
-    if next_challenge is not None:
-        refreshed = next(c for c in _sorted_challenges(session) if c.id == next_challenge.id)
-        next_out = ChallengeOut.model_validate(refreshed)
+    next_out = ChallengeOut.model_validate(next_challenge) if next_challenge is not None else None
+    session_out = SessionOut.model_validate(session) if session.status == "completed" else None
 
     return SubmitResponse(
         score=score,
         passed=passed,
-        verified_skill_level=evaluation.verified_skill_level,
+        verified_skill_level=verified_level,
         feedback=evaluation.feedback,
         dimensions=evaluation.dimensions,
         next_challenge=next_out,

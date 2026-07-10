@@ -46,9 +46,10 @@ uv run python test_groq.py
 
 Copy `.env.example` → `.env` and fill in:
 
-- `GROQ_API_KEY` — LLM (skills, roadmaps)
+- `GROQ_API_KEY` — LLM (skills, roadmaps, skill-gap narrative)
 - `DATABASE_URL` — Neon Postgres
-- `MISTRAL_API_KEY` — PDF resume OCR
+- `MISTRAL_API_KEY` — PDF resume OCR (Mistral OCR 3)
+- `MISTRAL_API_KEY2` — separate key/quota for the interview LLM (chat, not OCR — see below)
 - `ADMIN_API_KEY` — protects `POST /api/admin/scrape`
 - `GOOGLE_APPLICATION_CREDENTIALS` — path to your Google Cloud service account JSON for TTS/STT
 
@@ -122,7 +123,134 @@ curl -X POST http://127.0.0.1:8000/api/admin/scrape \
 | `GET /api/interview/{student_id}/history` | fetch stored interview sessions + turns |
 | `POST /api/voice/tts` | generate spoken audio from text using Google Cloud TTS |
 | `POST /api/voice/stt` | transcribe uploaded audio using Google Cloud Speech-to-Text |
-| `POST /api/gap`, `POST /api/roadmap` | 501 — next phase |
+| `POST /api/roadmap` | 501 — next phase |
+
+The interview's question generation, answer evaluation, and summary all run on
+`ChatMistralAI` (`interview_mistral_model`, default `mistral-small-latest`) using
+`MISTRAL_API_KEY2` — a separate key from OCR's `MISTRAL_API_KEY`, kept on its own
+quota. This replaced Groq after testing showed Groq's small model intermittently
+returning malformed tool calls under the interview's multi-field structured output,
+producing generic fallback text instead of a real evaluation. Every LLM call
+(interview, practice, skill gap) now goes through `app/services/llm_utils.py`'s
+`call_structured()`, which retries once before falling back to a deterministic
+template — so a single flaky response never surfaces as a 500 to the student.
+
+## Skill practice / game endpoints
+
+Practice one skill at a time — separate from `/api/interview` (own tables). Student
+picks 1–3 skills; each gets one challenge (coding for tech track, scenario for
+non-tech), AI-scored 0–10 and passed at `practice_pass_threshold` (default 7.0).
+Challenges are generated lazily (one Groq call per request) and difficulty adapts
+to the previous score. Groq only — no code execution in this MVP (AI review of the
+submitted code/answer; API is shaped for a sandboxed runner later).
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/practice/skills/suggest` | `{profile_id}` → suggested skills + track (tech/nontech) from the profile |
+| `POST /api/practice/start` | `{profile_id, skills[1–3], difficulty: easy\|medium\|hard\|auto}` → session + first challenge |
+| `POST /api/practice/{session_id}/submit` | coding: `{challenge_id, code, explanation?}`; scenario: `{challenge_id, answer}` → score, passed, next challenge or session summary |
+| `GET /api/practice/{session_id}` | fetch a session with all challenges |
+| `GET /api/practice/history/{profile_id}` | all practice sessions for a profile |
+
+Session end returns a combined-gap-ready shape: `verified_strong_skills`,
+`verified_weak_skills`, and `skill_scores` (`{skill: 0–10}`). `difficulty=auto`
+infers from `years_of_experience`. Tech coding challenges also return
+`starter_code` + `expected_language` (python/javascript/sql) for a Monaco editor.
+
+```bash
+# 1. Suggest skills from a saved profile
+curl -X POST http://127.0.0.1:8000/api/practice/skills/suggest \
+  -H "Content-Type: application/json" -d '{"profile_id":"<uuid>"}'
+
+# 2. Start (tech — Python + SQL)
+curl -X POST http://127.0.0.1:8000/api/practice/start \
+  -H "Content-Type: application/json" \
+  -d '{"profile_id":"<uuid>","skills":["Python","SQL"],"difficulty":"auto"}'
+
+# 3. Submit code for the current challenge
+curl -X POST http://127.0.0.1:8000/api/practice/<session_id>/submit \
+  -H "Content-Type: application/json" \
+  -d '{"challenge_id":"<uuid>","code":"def solve(): ...","explanation":"..."}'
+
+# 4. Final session (summary + verified skills)
+curl http://127.0.0.1:8000/api/practice/<session_id>
+```
+
+Config (`app/config.py`): `practice_pass_threshold` (7.0),
+`practice_max_skills_per_session` (3), `practice_groq_model`.
+
+## Unified skill gap agent
+
+The brain of Disha: merges **four signals** into one report and saves it as a
+`skill_gap_snapshots` row (history kept — `GET` returns the latest by default).
+
+1. **Claimed skills** — `student_profiles.skills` (what the student says they have)
+2. **Market demand** — Chroma `search_jobs(target_role)` (what Nepal employers want)
+3. **Interview proof** — latest *completed* interview: any `skill_tag` scored `<5` → weak, `>=7` → strong
+4. **Practice proof** — latest *completed* practice session: its own `verified_strong_skills` / `verified_weak_skills`
+
+Practice signal wins over interview signal for the same skill (it's a dedicated
+skill test); a **weak** rating always overrides a **strong** one for the same
+skill regardless of source, so one bad showing on a claimed skill still surfaces.
+
+Every skill lands in one or more buckets: `matched` (claimed + market wants),
+`market_missing` (market wants, not on CV), `verified_strong` / `verified_weak`
+(from interview/practice), `overclaimed` (claimed but proved weak), or
+`claimed_unverified` (on CV, never tested). `priority_learn` ranks the union of
+all skills by a documented 0–100 formula (see comments in
+`app/services/skill_gap.py`) — jobs-in-demand capped at 40, +20 weak, +15
+market-missing, +10 overclaimed, −15 strong, −10 matched-and-not-weak.
+`readiness_score` (0–100) blends match ratio, verified-strong ratio, interview
+score, and practice pass rate. `roadmap_inputs` (top-5 priority skills,
+`time_per_week`, `budget`, `readiness_score`, a 2-weeks-per-skill estimate) is
+ready for the next phase's roadmap agent — nothing else reads it yet.
+
+The narrative (`generate_gap_narrative`, Groq) explains the computed
+`gap_data` in English + one Nepali line — it is instructed to invent nothing,
+only cite numbers/skills/jobs already in the payload; if Groq fails, a
+deterministic fallback narrative is built from the same data.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/gap` | `{profile_id, interview_session_id?, practice_session_id?, include_narrative?, n_jobs?}` → combined report, saved as a snapshot. Omitted session ids default to the latest *completed* session of that type. |
+| `POST /api/gap/market` | `{profile_id}` or `{skills, target_role}` → market-only comparison (no interview/practice merge; unchanged from the original `compute_skill_gap`) |
+| `GET /api/gap/{profile_id}` | latest snapshot |
+| `GET /api/gap/{profile_id}/history?limit=10` | snapshot history |
+
+```bash
+# 1. Combined gap — uses latest completed interview + practice automatically
+curl -X POST http://127.0.0.1:8000/api/gap \
+  -H "Content-Type: application/json" \
+  -d '{"profile_id":"<uuid>","include_narrative":true}'
+
+# 2. Latest snapshot
+curl http://127.0.0.1:8000/api/gap/<profile_id>
+```
+
+Response shape (truncated):
+```json
+{
+  "id": "snapshot-uuid",
+  "gap_data": {
+    "readiness_score": 58,
+    "match_ratio": 0.42,
+    "matched_skills": [{"skill": "Python", "jobs_requiring": 14, "status": "matched"}],
+    "market_missing_skills": [{"skill": "Docker", "jobs_requiring": 9, "priority_score": 85}],
+    "verified_strong_skills": [{"skill": "FastAPI", "source": "practice", "score": 8.5}],
+    "verified_weak_skills": [{"skill": "SQL", "source": "practice", "score": 4.0}],
+    "overclaimed_skills": [{"skill": "PyTorch", "claimed": true, "score": 3.5, "source": "practice", "reason": "..."}],
+    "interview_insights": {"overall_score": 6.8, "strengths": [...], "weaknesses": [...]},
+    "priority_learn": [{"skill": "Docker", "priority_score": 85, "reason": "9 Nepal jobs require it; not on CV"}],
+    "roadmap_inputs": {"priority_skills": [...], "time_per_week": 15, "budget": "free", "estimated_weeks": 8}
+  },
+  "narrative_summary": "You're at 58% readiness for the Backend Developer role... तपाईं सफल हुनुहुनेछ!"
+}
+```
+
+Config (`app/config.py`): `gap_n_jobs` (20), `gap_include_narrative_default` (true).
+The LangGraph `gap_node` (`app/orchestrator/nodes/gap.py`) runs the same combined
+agent when `profile_id` is present in state, falling back to market-only otherwise
+— not wired to any endpoint yet, prepared for the roadmap phase.
 
 ## Architecture
 
