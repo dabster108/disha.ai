@@ -1,11 +1,12 @@
 from fastapi import APIRouter
 
-from app.api.routes import admin, gap, health, interview, practice, profile, roadmap, voice
+from app.api.routes import admin, gap, health, interview, jobs, practice, profile, roadmap, voice
 
 api_router = APIRouter()
 api_router.include_router(health.router)
 api_router.include_router(profile.router)
 api_router.include_router(gap.router)
+api_router.include_router(jobs.router)
 api_router.include_router(roadmap.router)
 api_router.include_router(interview.router)
 api_router.include_router(practice.router)

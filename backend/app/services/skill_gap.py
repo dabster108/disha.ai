@@ -445,6 +445,9 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
         }
 
     priority_skill_names = [row["skill"] for row in priority_learn[:5]]
+    from app.services.job_matching import rank_jobs_for_student
+
+    ranked_jobs = rank_jobs_for_student(ctx)
 
     return {
         "target_role": profile.target_role,
@@ -470,10 +473,14 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
             {
                 "title": job["title"],
                 "company": job["company"],
+                "location": job.get("location"),
                 "source_url": job["source_url"],
-                "similarity": job["similarity"],
+                "similarity": job.get("composite_score", 0),
+                "match_score": job["match_score"],
+                "match_label": job["match_label"],
+                "explanation": job.get("explanation"),
             }
-            for job in jobs[:5]
+            for job in ranked_jobs
         ],
         "roadmap_inputs": {
             "target_role": profile.target_role,

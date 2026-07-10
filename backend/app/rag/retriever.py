@@ -23,14 +23,28 @@ logger = logging.getLogger("disha.rag.retriever")
 
 @lru_cache
 def _collection() -> chromadb.Collection:
+    """Chroma PersistentClient + collection handle, created once per process.
+
+    `@lru_cache` on a no-arg function means every caller — including every
+    request — gets back this same client/collection instead of re-opening
+    the on-disk store. Warmed eagerly at startup by `warm_up()` below.
+    """
     settings = get_settings()
     client = chromadb.PersistentClient(path=str(settings.chroma_path))
     embedder = get_embedder()
-    return client.get_or_create_collection(
+    collection = client.get_or_create_collection(
         name=settings.chroma_collection,
         embedding_function=embedder,
         metadata={"hnsw:space": "cosine", "embedding_model": settings.embedding_model},
     )
+    logger.info("Chroma initialized.")
+    return collection
+
+
+def warm_up() -> None:
+    """Force the embedding model + Chroma collection to load now, not on the
+    first request. Call once from the FastAPI startup lifespan (app.main)."""
+    _collection()
 
 
 def _hybrid_score(
@@ -82,7 +96,11 @@ def _hybrid_score(
             score += 0.08
         if category in _TECH_CATEGORIES and title_score == 0.0 and category_score == 0.0:
             score -= 0.10
-    return round(max(0.0, score), 4)
+    # semantic is already a similarity in [0,1], but the title/skill/category
+    # boosts are additive bonuses layered on top and can push the sum past 1.0
+    # (e.g. a strong semantic match plus every boost firing) — clamp to [0,1]
+    # so this stays presentable as a percentage everywhere it's displayed.
+    return round(min(1.0, max(0.0, score)), 4)
 
 
 def search_jobs(

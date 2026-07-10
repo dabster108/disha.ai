@@ -49,6 +49,22 @@ class Settings(BaseSettings):
     job_search_skill_boost: float = 0.13
     job_search_category_boost: float = 0.10
 
+    # Multi-factor job matching
+    job_match_max_results: int = 8
+    job_match_retrieval_min_similarity: float = 0.38
+    job_match_min_role_similarity: float = 0.45
+    job_match_min_skill_overlap: float = 0.15
+    job_match_min_domain_alignment: float = 0.40
+    job_match_min_composite: float = 0.55
+    job_match_skills_weight: float = 0.28
+    job_match_role_weight: float = 0.22
+    job_match_experience_weight: float = 0.12
+    job_match_seniority_weight: float = 0.12
+    job_match_domain_weight: float = 0.12
+    job_match_education_weight: float = 0.06
+    job_match_location_weight: float = 0.04
+    job_match_career_goal_weight: float = 0.04
+
     data_dir: Path = BACKEND_DIR / "data"
     jobs_file: Path = BACKEND_DIR / "data" / "jobs.json"
     chroma_path: Path = BACKEND_DIR / "data" / "chroma"
