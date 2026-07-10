@@ -58,6 +58,13 @@ export default function Sidebar() {
         >
           New Simulation
         </Link>
+        <Link
+          href="/admin"
+          className="mt-2 flex items-center justify-center gap-1.5 py-2 text-xs text-outline transition-colors hover:text-secondary"
+        >
+          <Icon name="admin_panel_settings" size={14} />
+          Admin
+        </Link>
       </div>
     </aside>
   );

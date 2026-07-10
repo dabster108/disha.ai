@@ -12,6 +12,11 @@
   Next.js 16 · FastAPI · LangGraph · Chroma · Neon Postgres
 </p>
 
+```
+$ disha-ai --engine "Agentic RAG + LangGraph Orchestrator" --market "Nepal" --status "job-ready"
+> intake → gap → route → roadmap → save   [4-signal skill gap · explainable job matching · human-verified]
+```
+
 ---
 
 ## What is DISHA AI
@@ -104,8 +109,9 @@ interview, with an edge-tts/text-only fallback), and the job portals themselves.
 | **Skill gap with evidence** | Four-signal merge (claimed / market / interview / practice) with a validation panel showing exactly which signals back each verdict and an accuracy level (High/Medium/Low). |
 | **Multi-factor job matching** | Explainable scoring across skills, role similarity, seniority, domain, education, and location — with role-conflict rules so "AI Engineer" doesn't match "AI Instructor" and generic keywords don't inflate scores. |
 | **Roadmap + auto-progress** | A personalized, budget/time-constrained learning path; opening a resource starts a dwell timer that prompts to mark it complete instead of requiring a blind manual checkbox. |
+| **Learning curriculum agent** | A separate Mistral agent (its own key/quota) turns the skill gap into a sectioned, module-based curriculum — the LLM only ever picks which catalog skill each module teaches, never a URL; every resource link comes from a curated/deterministic lookup, so nothing is hallucinated. |
 | **Leaderboard category scores** | Real per-category scores (interview, practice, skill gap, roadmap %) — no synthetic users, only actual completed sessions. |
-| **Admin panel** | Key-gated `/admin`: platform stats, user list, a full per-student verification dossier, and the scrape pipeline controls. |
+| **Admin panel** | `/admin`, same DISHA visual language as the student app, no login screen (dev-mode key from env) — platform stats, every student's full verification dossier, and read-only access to every interview report, practice session, gap snapshot, and roadmap across all students. |
 
 ## Monorepo Structure
 
@@ -209,11 +215,20 @@ job matches use the same catalog-normalized skills throughout.
 
 ## Admin
 
-`/admin` is a separate, key-gated panel (not part of the student sidebar). On first visit it
-asks for the admin key once, stores it in `sessionStorage`, and sends it as `X-Admin-Key` on
-every `/api/admin/*` call. Set `ADMIN_API_KEY` in `backend/.env` to enable it — endpoints
-return `503` until it's configured. No separate auth system; this is intentionally the
-lightest gate that still keeps the panel off the public student surface.
+`/admin` opens directly — no login screen. It shares the same visual language as the student
+app (logo, primary blue, white cards, Material icons) with its own left-nav chrome instead of
+the student sidebar. The frontend reads `NEXT_PUBLIC_ADMIN_API_KEY` (same value as the
+backend's `ADMIN_API_KEY`) and attaches it as `X-Admin-Key` on every `/api/admin/*` call
+automatically. This is a **dev/local convenience, not real access control** — the key is
+bundled into client-side JS — the backend's `require_admin` dependency (which checks the same
+value server-side) is what actually protects the admin API. A discreet "Admin" link sits in
+the student sidebar footer. Endpoints return `503` until `ADMIN_API_KEY` is set, `401` on a
+mismatched key. No separate auth/login system exists yet.
+
+From `/admin` a human reviewer can browse every student's full dossier (profile, skill gap,
+roadmap, learning curriculum, job matches, leaderboard scores) and every interview report
+read-only, at the same depth the student themselves sees — plus set a verification status
+(`verified` / `needs_review` / `flagged`) with notes, and trigger/monitor the scrape pipeline.
 
 ## Docs
 

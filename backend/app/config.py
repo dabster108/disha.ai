@@ -27,6 +27,11 @@ class Settings(BaseSettings):
     # Groq's small model intermittently emits malformed tool calls under
     # structured output; Mistral is steadier for the interview's multi-field schemas.
     mistral_api_key2: str | None = None
+    # Separate key/quota for learning-curriculum generation (app/services/learning_agent.py).
+    # Falls back to mistral_api_key2 if unset, so the feature still works before a
+    # dedicated key is provisioned — just sharing that quota instead of its own.
+    mistral_api_key3: str | None = None
+    learning_mistral_model: str = "mistral-small-latest"
     admin_api_key: str | None = None  # protects /api/admin/*; endpoints 503 when unset
     google_application_credentials: str | None = None
     google_tts_language_code: str = "en-US"

@@ -236,6 +236,21 @@ export const updateRoadmapNodeProgress = (profileId, nodeId, completed) =>
   });
 
 // ---------------------------------------------------------------------------
+// Learning curriculum (separate from the roadmap — sectioned, agent-generated)
+// ---------------------------------------------------------------------------
+
+export const generateCurriculum = (profileId, force = false) =>
+  apiFetch("/api/learning/generate", { method: "POST", json: { profile_id: profileId, force } });
+
+export const getLatestCurriculum = (profileId) => apiFetch(`/api/learning/${profileId}`);
+
+export const updateCurriculumProgress = (profileId, sectionId, moduleId, completed, source = "manual") =>
+  apiFetch(`/api/learning/${profileId}/progress`, {
+    method: "PATCH",
+    json: { section_id: sectionId, module_id: moduleId, completed, source },
+  });
+
+// ---------------------------------------------------------------------------
 // Voice
 // ---------------------------------------------------------------------------
 

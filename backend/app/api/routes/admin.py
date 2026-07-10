@@ -22,12 +22,14 @@ from app.api.deps import get_db
 from app.config import get_settings
 from app.db.models import (
     InterviewSession,
+    LearningCurriculum,
     PracticeSession,
     Roadmap,
     ScrapeRun,
     SkillGapSnapshot,
     StudentProfile,
 )
+from app.api.routes.interview import InterviewSessionOut
 from app.db.session import async_session_factory
 from app.services.job_matching import rank_jobs_for_student
 from app.services.roadmap import compute_roadmap_progress_pct
@@ -484,3 +486,253 @@ async def update_verification(
     profile.profile_meta = meta
     await db.commit()
     return meta["admin_verification"]
+
+
+# ---------------------------------------------------------------------------
+# Cross-user browsing: interviews (with full report detail), practice, gaps,
+# roadmaps. Read-only, reuses the exact schemas the student-facing routes
+# already return — an admin sees the same report a student would, never a
+# separate re-derived view.
+# ---------------------------------------------------------------------------
+
+
+class AdminInterviewSummary(BaseModel):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+    full_name: str | None
+    target_role: str
+    track: str
+    status: str
+    overall_score: float | None
+    started_at: datetime
+    finished_at: datetime | None
+    turn_count: int
+
+
+@router.get("/interviews", response_model=list[AdminInterviewSummary], dependencies=[Depends(require_admin)])
+async def admin_list_interviews(
+    profile_id: uuid.UUID | None = None, limit: int = 50, db: AsyncSession = Depends(get_db)
+) -> list[AdminInterviewSummary]:
+    limit = min(max(limit, 1), 200)
+    query = (
+        select(InterviewSession)
+        .options(selectinload(InterviewSession.turns))
+        .order_by(InterviewSession.started_at.desc())
+        .limit(limit)
+    )
+    if profile_id is not None:
+        query = query.where(InterviewSession.profile_id == profile_id)
+    sessions = (await db.execute(query)).scalars().all()
+    if not sessions:
+        return []
+
+    profiles = (
+        await db.execute(select(StudentProfile).where(StudentProfile.id.in_({s.profile_id for s in sessions})))
+    ).scalars().all()
+    names = {p.id: p.full_name for p in profiles}
+
+    return [
+        AdminInterviewSummary(
+            id=s.id,
+            profile_id=s.profile_id,
+            full_name=names.get(s.profile_id),
+            target_role=s.target_role,
+            track=s.track,
+            status=s.status,
+            overall_score=s.overall_score,
+            started_at=s.started_at,
+            finished_at=s.finished_at,
+            turn_count=len(s.turns),
+        )
+        for s in sessions
+    ]
+
+
+@router.get("/interviews/{session_id}", response_model=InterviewSessionOut, dependencies=[Depends(require_admin)])
+async def admin_get_interview(session_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> InterviewSession:
+    """Full session + turns — the exact same report shape the student sees on
+    /mock-interview/report, read-only for a human admin."""
+    session = (
+        await db.execute(
+            select(InterviewSession)
+            .options(selectinload(InterviewSession.turns))
+            .where(InterviewSession.id == session_id)
+        )
+    ).scalar_one_or_none()
+    if session is None:
+        raise HTTPException(status_code=404, detail="Interview session not found")
+    return session
+
+
+class AdminPracticeSummary(BaseModel):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+    full_name: str | None
+    skills_selected: list[str]
+    status: str
+    overall_score: float | None
+    verified_strong_skills: list[str] | None
+    verified_weak_skills: list[str] | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
+@router.get("/practice", response_model=list[AdminPracticeSummary], dependencies=[Depends(require_admin)])
+async def admin_list_practice(
+    profile_id: uuid.UUID | None = None, limit: int = 50, db: AsyncSession = Depends(get_db)
+) -> list[AdminPracticeSummary]:
+    limit = min(max(limit, 1), 200)
+    query = select(PracticeSession).order_by(PracticeSession.started_at.desc()).limit(limit)
+    if profile_id is not None:
+        query = query.where(PracticeSession.profile_id == profile_id)
+    sessions = (await db.execute(query)).scalars().all()
+    if not sessions:
+        return []
+
+    profiles = (
+        await db.execute(select(StudentProfile).where(StudentProfile.id.in_({s.profile_id for s in sessions})))
+    ).scalars().all()
+    names = {p.id: p.full_name for p in profiles}
+
+    return [
+        AdminPracticeSummary(
+            id=s.id,
+            profile_id=s.profile_id,
+            full_name=names.get(s.profile_id),
+            skills_selected=s.skills_selected,
+            status=s.status,
+            overall_score=s.overall_score,
+            verified_strong_skills=s.verified_strong_skills,
+            verified_weak_skills=s.verified_weak_skills,
+            started_at=s.started_at,
+            finished_at=s.finished_at,
+        )
+        for s in sessions
+    ]
+
+
+class AdminGapSummary(BaseModel):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+    full_name: str | None
+    target_role: str
+    readiness_score: float | None
+    jobs_analyzed: int
+    match_ratio: float
+    created_at: datetime
+
+
+@router.get("/gaps", response_model=list[AdminGapSummary], dependencies=[Depends(require_admin)])
+async def admin_list_gaps(
+    profile_id: uuid.UUID | None = None, limit: int = 50, db: AsyncSession = Depends(get_db)
+) -> list[AdminGapSummary]:
+    limit = min(max(limit, 1), 200)
+    query = select(SkillGapSnapshot).order_by(SkillGapSnapshot.created_at.desc()).limit(limit)
+    if profile_id is not None:
+        query = query.where(SkillGapSnapshot.profile_id == profile_id)
+    snapshots = (await db.execute(query)).scalars().all()
+    if not snapshots:
+        return []
+
+    profiles = (
+        await db.execute(select(StudentProfile).where(StudentProfile.id.in_({s.profile_id for s in snapshots})))
+    ).scalars().all()
+    names = {p.id: p.full_name for p in profiles}
+
+    return [
+        AdminGapSummary(
+            id=s.id,
+            profile_id=s.profile_id,
+            full_name=names.get(s.profile_id),
+            target_role=s.target_role,
+            readiness_score=(s.gap_data or {}).get("readiness_score"),
+            jobs_analyzed=s.jobs_analyzed,
+            match_ratio=s.match_ratio,
+            created_at=s.created_at,
+        )
+        for s in snapshots
+    ]
+
+
+class AdminRoadmapSummary(BaseModel):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+    full_name: str | None
+    total_weeks: int | None
+    status: str
+    progress_pct: float
+    created_at: datetime
+
+
+@router.get("/roadmaps", response_model=list[AdminRoadmapSummary], dependencies=[Depends(require_admin)])
+async def admin_list_roadmaps(
+    profile_id: uuid.UUID | None = None, limit: int = 50, db: AsyncSession = Depends(get_db)
+) -> list[AdminRoadmapSummary]:
+    limit = min(max(limit, 1), 200)
+    query = select(Roadmap).order_by(Roadmap.created_at.desc()).limit(limit)
+    if profile_id is not None:
+        query = query.where(Roadmap.profile_id == profile_id)
+    roadmaps = (await db.execute(query)).scalars().all()
+    if not roadmaps:
+        return []
+
+    profiles = (
+        await db.execute(select(StudentProfile).where(StudentProfile.id.in_({r.profile_id for r in roadmaps})))
+    ).scalars().all()
+    names = {p.id: p.full_name for p in profiles}
+
+    return [
+        AdminRoadmapSummary(
+            id=r.id,
+            profile_id=r.profile_id,
+            full_name=names.get(r.profile_id),
+            total_weeks=r.total_weeks,
+            status=r.status,
+            progress_pct=compute_roadmap_progress_pct(r),
+            created_at=r.created_at,
+        )
+        for r in roadmaps
+    ]
+
+
+class AdminCurriculumSummary(BaseModel):
+    id: uuid.UUID
+    profile_id: uuid.UUID
+    full_name: str | None
+    section_count: int
+    module_count: int
+    completed_modules: int
+    status: str
+    created_at: datetime
+
+
+@router.get("/learning", response_model=list[AdminCurriculumSummary], dependencies=[Depends(require_admin)])
+async def admin_list_learning(
+    profile_id: uuid.UUID | None = None, limit: int = 50, db: AsyncSession = Depends(get_db)
+) -> list[AdminCurriculumSummary]:
+    limit = min(max(limit, 1), 200)
+    query = select(LearningCurriculum).order_by(LearningCurriculum.created_at.desc()).limit(limit)
+    if profile_id is not None:
+        query = query.where(LearningCurriculum.profile_id == profile_id)
+    curricula = (await db.execute(query)).scalars().all()
+    if not curricula:
+        return []
+
+    profiles = (
+        await db.execute(select(StudentProfile).where(StudentProfile.id.in_({c.profile_id for c in curricula})))
+    ).scalars().all()
+    names = {p.id: p.full_name for p in profiles}
+
+    return [
+        AdminCurriculumSummary(
+            id=c.id,
+            profile_id=c.profile_id,
+            full_name=names.get(c.profile_id),
+            section_count=len(c.sections or []),
+            module_count=sum(len(s.get("modules", [])) for s in (c.sections or [])),
+            completed_modules=len((c.progress or {}).get("completed_modules", [])),
+            status=c.status,
+            created_at=c.created_at,
+        )
+        for c in curricula
+    ]

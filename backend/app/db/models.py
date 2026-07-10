@@ -50,6 +50,7 @@ class StudentProfile(Base):
     interview_sessions: Mapped[list[InterviewSession]] = relationship(back_populates="profile")
     practice_sessions: Mapped[list[PracticeSession]] = relationship(back_populates="profile")
     skill_gap_snapshots: Mapped[list[SkillGapSnapshot]] = relationship(back_populates="profile")
+    learning_curricula: Mapped[list[LearningCurriculum]] = relationship(back_populates="profile")
 
 
 class Roadmap(Base):
@@ -70,6 +71,26 @@ class Roadmap(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     profile: Mapped[StudentProfile] = relationship(back_populates="roadmaps")
+
+
+class LearningCurriculum(Base):
+    """Agent-generated learning curriculum (app/services/learning_agent.py),
+    separate from the roadmap: sectioned modules with real resource links
+    (never LLM-invented — sourced from app.services.learning_resources)."""
+
+    __tablename__ = "learning_curricula"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("student_profiles.id"))
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("skill_gap_snapshots.id"), nullable=True)
+    # [{"id", "title", "modules": [{"id","title","description","skill","type","resources":[...]}]}]
+    sections: Mapped[list] = mapped_column(JSONB, default=list)
+    summary: Mapped[str | None] = mapped_column(Text)
+    progress: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"completed_modules": ["module_id", ...]}
+    status: Mapped[str] = mapped_column(String(20), default="active")  # active | replanned
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    profile: Mapped[StudentProfile] = relationship(back_populates="learning_curricula")
 
 
 class InterviewSession(Base):

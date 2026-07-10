@@ -1,26 +1,15 @@
 import { apiUrl, ApiError } from "@/lib/api";
 
-const ADMIN_KEY_STORAGE = "disha_admin_key";
+// Dev/local convenience only — bundled into client JS via NEXT_PUBLIC_*, so
+// this is not real access control. The backend's require_admin dependency
+// (checking the same value server-side) is what actually protects
+// /api/admin/*; this just means /admin doesn't need a login screen locally.
+const ADMIN_KEY = process.env.NEXT_PUBLIC_ADMIN_API_KEY || "";
 
-export function getStoredAdminKey() {
-  if (typeof window === "undefined") return "";
-  return sessionStorage.getItem(ADMIN_KEY_STORAGE) || "";
-}
-
-export function storeAdminKey(key) {
-  if (typeof window === "undefined") return;
-  sessionStorage.setItem(ADMIN_KEY_STORAGE, key);
-}
-
-export function clearAdminKey() {
-  if (typeof window === "undefined") return;
-  sessionStorage.removeItem(ADMIN_KEY_STORAGE);
-}
-
-/** Fetch wrapper for /api/admin/* — attaches X-Admin-Key from sessionStorage. */
+/** Fetch wrapper for /api/admin/* — attaches X-Admin-Key from env automatically. */
 export async function adminFetch(path, options = {}) {
   const { json, headers, ...rest } = options;
-  const key = getStoredAdminKey();
+  const key = ADMIN_KEY;
 
   const response = await fetch(apiUrl(path), {
     ...rest,
@@ -71,3 +60,23 @@ export const triggerScrape = (payload) =>
 export const getScrapeRuns = (limit = 20) => adminFetch(`/api/admin/scrape/runs?limit=${limit}`);
 
 export const getSourceRanking = () => adminFetch("/api/admin/scrape/sources/ranking");
+
+function withProfileFilter(path, opts = {}) {
+  const params = new URLSearchParams();
+  if (opts.profileId) params.set("profile_id", opts.profileId);
+  if (opts.limit) params.set("limit", opts.limit);
+  const qs = params.toString();
+  return `${path}${qs ? `?${qs}` : ""}`;
+}
+
+export const getAdminInterviews = (opts = {}) => adminFetch(withProfileFilter("/api/admin/interviews", opts));
+
+export const getAdminInterview = (sessionId) => adminFetch(`/api/admin/interviews/${sessionId}`);
+
+export const getAdminPractice = (opts = {}) => adminFetch(withProfileFilter("/api/admin/practice", opts));
+
+export const getAdminGaps = (opts = {}) => adminFetch(withProfileFilter("/api/admin/gaps", opts));
+
+export const getAdminRoadmaps = (opts = {}) => adminFetch(withProfileFilter("/api/admin/roadmaps", opts));
+
+export const getAdminLearning = (opts = {}) => adminFetch(withProfileFilter("/api/admin/learning", opts));

@@ -200,7 +200,11 @@ export default function AdminUserDossierPage({ params }) {
           ) : (
             <div className="space-y-2">
               {interviews.map((s) => (
-                <div key={s.id} className="flex items-center justify-between rounded-lg border border-outline-variant/60 p-3 text-sm">
+                <Link
+                  key={s.id}
+                  href={`/admin/interviews/${s.id}`}
+                  className="flex items-center justify-between rounded-lg border border-outline-variant/60 p-3 text-sm transition-colors hover:border-primary"
+                >
                   <div>
                     <span
                       className={`mr-2 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
@@ -212,8 +216,11 @@ export default function AdminUserDossierPage({ params }) {
                     <span className="text-secondary">{new Date(s.started_at).toLocaleDateString()}</span>
                     <span className="ml-2 text-secondary">{s.turn_count} turns</span>
                   </div>
-                  <span className="font-bold text-on-surface">{s.overall_score != null ? `${s.overall_score}/10` : "—"}</span>
-                </div>
+                  <span className="flex items-center gap-2">
+                    <span className="font-bold text-on-surface">{s.overall_score != null ? `${s.overall_score}/10` : "—"}</span>
+                    <Icon name="chevron_right" size={18} className="text-secondary" />
+                  </span>
+                </Link>
               ))}
             </div>
           )}

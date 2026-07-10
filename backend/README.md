@@ -151,7 +151,9 @@ dependency; 503 if `ADMIN_API_KEY` isn't set, 401 on a wrong/missing key).
 | `GET /api/admin/scrape/runs` | Recent runs |
 | `GET /api/admin/scrape/sources/ranking` | Latest completeness ranking by source |
 
-**Stats & human verification** (backs the `/admin` frontend panel):
+**Stats & human verification** (backs the `/admin` frontend panel — same DISHA visual
+language as the student app, no login screen; the frontend attaches `X-Admin-Key` from
+`NEXT_PUBLIC_ADMIN_API_KEY` automatically, see [../frontend/README.md](../frontend/README.md)):
 
 | Endpoint | Description |
 |---|---|
@@ -159,6 +161,12 @@ dependency; 503 if `ADMIN_API_KEY` isn't set, 401 on a wrong/missing key).
 | `GET /api/admin/users?limit=&q=` | Profile list with readiness + activity flags, searchable by name/email/role |
 | `GET /api/admin/users/{profile_id}` | Full dossier — profile, latest gap snapshot, interview/practice history, roadmap + progress %, a live job-match preview, and category scores |
 | `PATCH /api/admin/users/{profile_id}/verification` | `{status: verified\|needs_review\|flagged\|unreviewed, notes}` — stored in `profile.profile_meta.admin_verification`, no schema migration needed |
+| `GET /api/admin/interviews?profile_id=&limit=` | All interview sessions across students (or one), summary fields |
+| `GET /api/admin/interviews/{session_id}` | Full session + turns — the exact same shape the student's own report card renders, read-only |
+| `GET /api/admin/practice?profile_id=&limit=` | All practice sessions across students |
+| `GET /api/admin/gaps?profile_id=&limit=` | All skill-gap snapshots across students |
+| `GET /api/admin/roadmaps?profile_id=&limit=` | All roadmaps across students, with `progress_pct` |
+| `GET /api/admin/learning?profile_id=&limit=` | All generated learning curricula across students |
 
 ```bash
 curl -X POST http://127.0.0.1:8000/api/admin/scrape \
@@ -166,6 +174,29 @@ curl -X POST http://127.0.0.1:8000/api/admin/scrape \
   -H "Content-Type: application/json" \
   -d '{"mode":"aggregator","max_per_source":50,"reingest_chroma":true}'
 ```
+
+## Learning curriculum agent
+
+`app/services/learning_agent.py` (Mistral, `MISTRAL_API_KEY3` — falls back to
+`MISTRAL_API_KEY2`'s quota if unset) generates a sectioned, module-based curriculum from the
+student's skill gap — separate from the week-by-week roadmap. The LLM only ever writes a
+module's title, description, and which single catalog skill it teaches; it never writes a URL.
+Every module's `resources` are attached afterward from
+`app.services.learning_resources.build_resources_for_skill()` (curated catalog + deterministic
+search deep-links), and every module's skill is passed through
+`skills_catalog.normalize_skill()` — a skill the catalog doesn't recognize is dropped rather
+than kept as free text. Context (priority skills, the role's catalog skills, the existing
+roadmap skeleton) is gathered via `app/orchestrator/tools/learning.py`'s `@tool`-decorated
+functions before the single structured-output LLM call — the same "tools gather grounded
+context, then one reliable structured call" shape as interview/practice/roadmap/gap narrative,
+rather than a multi-turn tool-calling agent loop. Falls back to a deterministic one-module-
+per-priority-skill curriculum if the LLM call fails.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/learning/generate` | `{profile_id, force?}` → generates (or returns the existing active one, unless `force`) |
+| `GET /api/learning/{profile_id}` | latest active curriculum |
+| `PATCH /api/learning/{profile_id}/progress` | `{section_id, module_id, completed, source: open\|manual\|scroll_prompt}` — also best-effort marks a matching roadmap node/task complete if the skill matches, so finishing a module advances both views |
 
 ## Profile / CV endpoints
 

@@ -69,7 +69,7 @@ analysis/roadmap — `isNotFound()` in `lib/api.js` distinguishes that from a re
 | `/journey` | Step-by-step career journey (profile → gap → interview → practice → roadmap), same completion truth as the dashboard via `lib/journeyState.js` |
 | `/skill-gap` | Run/view the 4-signal gap report: readiness gauge, validation/evidence panel, skills (matched/strong/weak/overclaimed), priority-to-learn with score bars, market evidence with real job cards, role & technical differentiation, CTAs to practice/roadmap/jobs |
 | `/roadmap` | Skill-path (or legacy week) view; click a resource to open it and start a study-dwell timer that prompts to mark it complete |
-| `/learning` | Flat "next incomplete resource" queue across the whole roadmap, same auto-progress tracker as `/roadmap` |
+| `/learning` | Agent-generated, sectioned curriculum (`POST /api/learning/generate`) as the primary view once one exists, with a toggle back to the flat roadmap-derived queue; same open-resource auto-progress tracker as `/roadmap` either way |
 | `/mock-interview` | Duration picker (default 1 min — temporary, see note below) → start session |
 | `/mock-interview/active` | ChatGPT-style voice/text chat interview |
 | `/mock-interview/report` | Detailed report card: score + label, per-turn breakdown with dimension bars and off-topic flags, strengths/weaknesses, "what to practice next," print-friendly |
@@ -78,7 +78,7 @@ analysis/roadmap — `isNotFound()` in `lib/api.js` distinguishes that from a re
 | `/jobs/lab` | **Synthetic benchmark lab** — clearly banner'd as not-Nepal-jobs, demos content scoring against the public CSV dataset |
 | `/leaderboard` | Ranked entries with per-category score bars (interview/practice/gap/roadmap) |
 | `/applications` | Track saved jobs from `/jobs` through saved → applied → interview → offer |
-| `/admin` | Key-gated: overview stats, user list, per-student verification dossier, scrape controls, jobs corpus status, admin leaderboard view, read-only skills catalog view |
+| `/admin` | Opens directly (env-key auth, no login screen): overview stats, user list, per-student verification dossier, every interview report/practice session/gap snapshot/roadmap across all students, learning curricula status, scrape controls, jobs corpus status, admin leaderboard view, read-only skills catalog view |
 
 ## Profile / session model
 
@@ -96,12 +96,18 @@ not the platform one.
 
 ## Admin panel session model
 
-Separate from the above. `app/admin/layout.js` checks `sessionStorage` for an admin key on
-mount; if absent (or invalid), it shows a key-entry form. Once a key round-trips successfully
-against `GET /api/admin/stats`, it's stored in `sessionStorage` and attached as `X-Admin-Key`
-to every subsequent `/api/admin/*` call via `lib/adminApi.js`'s `adminFetch()`. "Lock" clears
-the stored key. This is intentionally lighter than a real auth system — it's a gate, not a
-user model.
+Separate from the above, and simpler: `/admin` opens with **no login screen**.
+`lib/adminApi.js`'s `adminFetch()` reads `NEXT_PUBLIC_ADMIN_API_KEY` from the environment and
+attaches it as `X-Admin-Key` on every `/api/admin/*` call automatically. `app/admin/layout.js`
+just verifies that key actually works (one `GET /api/admin/stats` check on mount) and shows a
+config-warning screen if it's missing or wrong — never a password prompt. This is a **local/dev
+convenience, not real access control**: the key is bundled into client-side JS via
+`NEXT_PUBLIC_*`, so the backend's `require_admin` check (validating the same value
+server-side) is what actually protects the admin API. Set `NEXT_PUBLIC_ADMIN_API_KEY` in
+`.env.local` to the same value as the backend's `ADMIN_API_KEY`; never commit a real key to
+`.env.example`. Admin chrome (`app/admin/layout.js`) intentionally matches the student app's
+visual language (same tokens, logo, `Icon.jsx`) with its own left-nav rather than a separate
+dark generic admin theme, and is not wrapped in the student `ProfileGuard`.
 
 ## Canonical skills everywhere
 
