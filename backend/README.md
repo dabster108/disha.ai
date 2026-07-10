@@ -50,6 +50,7 @@ Copy `.env.example` → `.env` and fill in:
 - `DATABASE_URL` — Neon Postgres
 - `MISTRAL_API_KEY` — PDF resume OCR
 - `ADMIN_API_KEY` — protects `POST /api/admin/scrape`
+- `GOOGLE_APPLICATION_CREDENTIALS` — path to your Google Cloud service account JSON for TTS/STT
 
 ## Daily workflow
 
@@ -116,6 +117,11 @@ curl -X POST http://127.0.0.1:8000/api/admin/scrape \
 | `POST /api/profile` | save skills, target role, location |
 | `GET /api/profile/{student_id}` | fetch profile |
 | `POST /api/profile/upload-resume` | Mistral OCR 3 → Groq skills (review before save) |
+| `POST /api/interview/start` | create adaptive interview session from saved profile |
+| `POST /api/interview/answer` | score one answer and generate the next question |
+| `GET /api/interview/{student_id}/history` | fetch stored interview sessions + turns |
+| `POST /api/voice/tts` | generate spoken audio from text using Google Cloud TTS |
+| `POST /api/voice/stt` | transcribe uploaded audio using Google Cloud Speech-to-Text |
 | `POST /api/gap`, `POST /api/roadmap` | 501 — next phase |
 
 ## Architecture
