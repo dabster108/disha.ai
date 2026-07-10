@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import Link from "next/link";
 import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import EmptyState from "@/components/ui/EmptyState";
@@ -61,12 +62,23 @@ export default function JobsPage() {
   return (
     <div className="min-h-screen p-12">
       <header className="mb-8 mask-reveal">
-        <h1 className="text-display-lg text-on-surface">Job Matches</h1>
-        <p className="mt-2 max-w-2xl text-body-lg text-secondary">
-          Precision-ranked postings for{" "}
-          <span className="font-bold text-on-surface">{profile?.target_role}</span> — scored across
-          skills, role fit, seniority, domain, and location.
-        </p>
+        <div className="flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
+          <div>
+            <h1 className="text-display-lg text-on-surface">Job Matches</h1>
+            <p className="mt-2 max-w-2xl text-body-lg text-secondary">
+              Precision-ranked postings for{" "}
+              <span className="font-bold text-on-surface">{profile?.target_role}</span> — scored
+              across skills, role fit, seniority, domain, and location.
+            </p>
+          </div>
+          <Link
+            href="/jobs/lab"
+            className="flex shrink-0 items-center gap-2 rounded-full border border-outline-variant px-5 py-2.5 text-label-md font-bold text-secondary hover:bg-surface-container-low"
+          >
+            <Icon name="science" size={18} />
+            Recommendation Lab
+          </Link>
+        </div>
         {jobs.length > 0 && (
           <p className="mt-3 text-label-md text-secondary">
             Showing <span className="font-bold text-on-surface">{jobs.length}</span>{" "}

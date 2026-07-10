@@ -187,6 +187,7 @@ async def answer_interview(
         "answer_quality": evaluation.answer_quality,
         "strengths": evaluation.strengths,
         "weaknesses": evaluation.weaknesses,
+        "off_topic": evaluation.off_topic,
     }
     session.difficulty = evaluation.suggested_difficulty
 

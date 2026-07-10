@@ -19,7 +19,7 @@ const RESOURCE_ICON = {
  *  - upcoming   -> neutral but still clickable — soft progression, nothing
  *    is locked behind prerequisites.
  */
-export default function SkillNode({ node, autoCompleted, onToggle, isToggling }) {
+export default function SkillNode({ node, autoCompleted, onToggle, isToggling, onResourceOpen }) {
   const [open, setOpen] = useState(false);
   const status = node.status || "upcoming";
   const isCompleted = status === "completed";
@@ -84,6 +84,7 @@ export default function SkillNode({ node, autoCompleted, onToggle, isToggling })
                   href={res.url}
                   target="_blank"
                   rel="noopener noreferrer"
+                  onClick={() => onResourceOpen?.(res)}
                   className="flex items-center gap-3 rounded-lg border border-outline-variant bg-surface-container-lowest p-3 transition-colors hover:bg-surface-container-low"
                 >
                   <Icon name={RESOURCE_ICON[res.type] || "link"} size={18} className="shrink-0 text-primary" />

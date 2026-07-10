@@ -8,6 +8,8 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 import RoadmapPathHeader from "@/components/roadmap/RoadmapPathHeader";
 import RoadmapSkillPath from "@/components/roadmap/RoadmapSkillPath";
+import StudyTrackerChip from "@/components/learning/StudyTrackerChip";
+import { useResourceStudyTracker } from "@/hooks/useResourceStudyTracker";
 import { useProfile } from "@/context/ProfileContext";
 import {
   createRoadmap,
@@ -123,8 +125,8 @@ export default function RoadmapPage() {
     }
   };
 
-  const toggleResource = async (week, taskIndex, resourceIndex) => {
-    const markingDone = !isResourceDone(roadmap.progress, week, taskIndex, resourceIndex);
+  const toggleResource = async (week, taskIndex, resourceIndex, forceDone) => {
+    const markingDone = forceDone ?? !isResourceDone(roadmap.progress, week, taskIndex, resourceIndex);
     try {
       const updated = await updateRoadmapProgress(profileId, week, taskIndex, markingDone, resourceIndex);
       setRoadmap(updated);
@@ -144,6 +146,33 @@ export default function RoadmapPage() {
     } finally {
       setTogglingNodeId(null);
     }
+  };
+
+  // Open a learning resource in a new tab, track dwell time, and mark
+  // progress complete on confirm or manual "Mark done" — instead of
+  // requiring a blind manual checkbox click for every resource.
+  const studyTracker = useResourceStudyTracker({
+    onComplete: async (tracked) => {
+      if (tracked.nodeId) {
+        await toggleNode(tracked.nodeId, true);
+      } else if (tracked.week != null) {
+        await toggleResource(tracked.week, tracked.taskIndex, tracked.resourceIndex, true);
+      }
+    },
+  });
+
+  const openNodeResource = (node, resource) => {
+    studyTracker.startTracking({ key: `node:${node.id}`, title: resource.title, nodeId: node.id });
+  };
+
+  const openTaskResource = (week, taskIndex, resourceIndex, resource) => {
+    studyTracker.startTracking({
+      key: `task:${week}:${taskIndex}:${resourceIndex}`,
+      title: resource.title,
+      week,
+      taskIndex,
+      resourceIndex,
+    });
   };
 
   if (loading || generating) {
@@ -186,6 +215,7 @@ export default function RoadmapPage() {
           progress={roadmap.progress}
           onToggleNode={toggleNode}
           togglingNodeId={togglingNodeId}
+          onResourceOpen={openNodeResource}
         />
 
         <div className="mt-10 flex flex-col items-center gap-4 text-center">
@@ -200,6 +230,15 @@ export default function RoadmapPage() {
             Back to Skill Gap Analysis
           </Link>
         </div>
+
+        <StudyTrackerChip
+          active={studyTracker.active}
+          pendingConfirm={studyTracker.pendingConfirm}
+          onMarkDone={studyTracker.markDoneNow}
+          onDismiss={studyTracker.dismiss}
+          onConfirmYes={studyTracker.confirmYes}
+          onConfirmNo={studyTracker.confirmNo}
+        />
       </div>
     );
   }
@@ -379,6 +418,7 @@ export default function RoadmapPage() {
                                       href={res.url}
                                       target="_blank"
                                       rel="noopener noreferrer"
+                                      onClick={() => !resDone && openTaskResource(week.week, i, ri, res)}
                                       className="flex-1 min-w-0"
                                     >
                                       <p className={`truncate text-sm font-semibold ${resDone ? "text-secondary line-through" : "text-on-surface hover:text-primary"}`}>
@@ -430,6 +470,15 @@ export default function RoadmapPage() {
           Back to Skill Gap Analysis
         </Link>
       </div>
+
+      <StudyTrackerChip
+        active={studyTracker.active}
+        pendingConfirm={studyTracker.pendingConfirm}
+        onMarkDone={studyTracker.markDoneNow}
+        onDismiss={studyTracker.dismiss}
+        onConfirmYes={studyTracker.confirmYes}
+        onConfirmNo={studyTracker.confirmNo}
+      />
     </div>
   );
 }

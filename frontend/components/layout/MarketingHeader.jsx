@@ -1,4 +1,6 @@
+import Image from "next/image";
 import Link from "next/link";
+import logo from "@/components/images/logo.png";
 
 export default function MarketingHeader() {
   return (
@@ -6,8 +8,9 @@ export default function MarketingHeader() {
       <nav className="mx-auto flex h-full max-w-container-max items-center justify-between px-margin-mobile md:px-margin-desktop">
         <Link
           href="/"
-          className="text-headline-md font-bold tracking-tight text-on-surface"
+          className="flex items-center gap-2.5 text-headline-md font-bold tracking-tight text-on-surface"
         >
+          <Image src={logo} alt="DISHA AI" width={32} height={32} className="rounded-lg" priority />
           DISHA AI
         </Link>
         <div className="hidden items-center gap-10 md:flex">

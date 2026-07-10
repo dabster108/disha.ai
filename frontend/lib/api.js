@@ -107,9 +107,12 @@ export function getDashboard(profileId) {
 }
 
 /** @param {string} [profileId] */
-export function getLeaderboard(profileId) {
-  const qs = profileId ? `?profile_id=${profileId}` : "";
-  return apiFetch(`/api/leaderboard${qs}`);
+export function getLeaderboard(profileId, limit) {
+  const params = new URLSearchParams();
+  if (profileId) params.set("profile_id", profileId);
+  if (limit) params.set("limit", limit);
+  const qs = params.toString();
+  return apiFetch(`/api/leaderboard${qs ? `?${qs}` : ""}`);
 }
 
 // ---------------------------------------------------------------------------
@@ -178,6 +181,30 @@ export const getJobMatches = (profileId, n) =>
   apiFetch(`/api/jobs/match/${profileId}${n ? `?n=${n}` : ""}`);
 
 export const getJobCorpusStatus = () => apiFetch("/api/jobs/status");
+
+// ---------------------------------------------------------------------------
+// Skills catalog — the fixed, canonical skill list used everywhere a skill
+// is entered or scored (onboarding, CV review, practice, gap, job matching).
+// ---------------------------------------------------------------------------
+
+export const getSkillsCatalog = () => apiFetch("/api/skills");
+
+export const getSkillsForRole = (role) =>
+  apiFetch(`/api/skills/by-role?role=${encodeURIComponent(role)}`);
+
+// Synthetic Recommendation Lab — a public benchmark dataset, NOT live Nepal
+// job postings. Separate demo/comparison path from matchJobs() above.
+export const getSyntheticRecommendations = (skills, topK = 10) =>
+  apiFetch("/api/jobs/synthetic-recommend", {
+    method: "POST",
+    json: { skills, top_k: topK },
+  });
+
+export const getSyntheticEval = (sampleN = 500) =>
+  apiFetch("/api/jobs/synthetic-eval", {
+    method: "POST",
+    json: { sample_n: sampleN },
+  });
 
 // ---------------------------------------------------------------------------
 // Roadmap

@@ -7,7 +7,7 @@ import SkillNode from "./SkillNode";
  * connector running behind the node circles, phases as section headers.
  * Soft progression — every node stays clickable regardless of status.
  */
-export default function RoadmapSkillPath({ path, progress, onToggleNode, togglingNodeId }) {
+export default function RoadmapSkillPath({ path, progress, onToggleNode, togglingNodeId, onResourceOpen }) {
   const phases = path?.phases || [];
   const autoCompletedByNode = new Map((progress?.auto_completed || []).map((entry) => [entry.node_id, entry]));
 
@@ -29,6 +29,7 @@ export default function RoadmapSkillPath({ path, progress, onToggleNode, togglin
                     autoCompleted={autoCompletedByNode.get(node.id)}
                     onToggle={onToggleNode}
                     isToggling={togglingNodeId === node.id}
+                    onResourceOpen={(res) => onResourceOpen?.(node, res)}
                   />
                 ))}
               </div>

@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.db.models import InterviewSession, PracticeSession, Roadmap, SkillGapSnapshot, StudentProfile
+from app.services.roadmap import compute_roadmap_progress_pct
 
 router = APIRouter(prefix="/api/leaderboard", tags=["leaderboard"])
 
@@ -29,7 +30,9 @@ class LeaderboardEntry(BaseModel):
     practice_avg: float | None = None
     has_gap: bool = False
     has_roadmap: bool = False
+    roadmap_pct: float = 0
     composite_score: float = 0
+    category_scores: dict[str, float] = Field(default_factory=dict)
     activities: list[str] = Field(default_factory=list)
     last_active_at: datetime | None = None
 
@@ -123,16 +126,19 @@ async def get_leaderboard(
     ).all()
     practice_map = {r.profile_id: r for r in practice_rows}
 
-    # Active roadmaps.
+    # Active roadmaps — full rows (not just existence) so progress % can be
+    # computed the same way /roadmap and /dashboard do.
     roadmap_rows = (
         await db.execute(
-            select(Roadmap.profile_id, func.max(Roadmap.created_at).label("last"))
+            select(Roadmap)
             .where(Roadmap.profile_id.in_(profile_ids), Roadmap.status == "active")
-            .group_by(Roadmap.profile_id)
+            .order_by(Roadmap.profile_id, Roadmap.created_at.desc())
         )
-    ).all()
-    roadmap_set = {r.profile_id for r in roadmap_rows}
-    roadmap_last = {r.profile_id: r.last for r in roadmap_rows}
+    ).scalars().all()
+    latest_roadmap: dict[uuid.UUID, Roadmap] = {}
+    for r in roadmap_rows:
+        if r.profile_id not in latest_roadmap:
+            latest_roadmap[r.profile_id] = r
 
     entries: list[LeaderboardEntry] = []
     for p in profiles:
@@ -140,11 +146,13 @@ async def get_leaderboard(
         readiness = gap.gap_data.get("readiness_score") if gap and gap.gap_data else None
         iv = interview_map.get(p.id)
         pr = practice_map.get(p.id)
+        roadmap = latest_roadmap.get(p.id)
+        roadmap_pct = compute_roadmap_progress_pct(roadmap)
 
         activities: list[str] = []
         if gap:
             activities.append("Skill gap")
-        if p.id in roadmap_set:
+        if roadmap:
             activities.append("Roadmap")
         if iv and iv.cnt:
             activities.append(f"{iv.cnt} interview{'s' if iv.cnt != 1 else ''}")
@@ -157,10 +165,20 @@ async def get_leaderboard(
                 gap.created_at if gap else None,
                 iv.last if iv else None,
                 pr.last if pr else None,
-                roadmap_last.get(p.id),
+                roadmap.created_at if roadmap else None,
             ]
             if t is not None
         ]
+
+        interview_avg = round(iv.avg, 1) if iv and iv.avg is not None else None
+        practice_avg = round(pr.avg, 1) if pr and pr.avg is not None else None
+
+        category_scores = {
+            "interview": interview_avg if interview_avg is not None else 0,
+            "practice": practice_avg if practice_avg is not None else 0,
+            "skill_gap": round(readiness, 1) if readiness is not None else 0,
+            "roadmap": roadmap_pct,
+        }
 
         entries.append(
             LeaderboardEntry(
@@ -170,18 +188,20 @@ async def get_leaderboard(
                 readiness_score=readiness,
                 interview_count=int(iv.cnt) if iv else 0,
                 interview_best=round(iv.best, 1) if iv and iv.best is not None else None,
-                interview_avg=round(iv.avg, 1) if iv and iv.avg is not None else None,
+                interview_avg=interview_avg,
                 practice_count=int(pr.cnt) if pr else 0,
                 practice_best=round(pr.best, 1) if pr and pr.best is not None else None,
-                practice_avg=round(pr.avg, 1) if pr and pr.avg is not None else None,
+                practice_avg=practice_avg,
                 has_gap=gap is not None,
-                has_roadmap=p.id in roadmap_set,
+                has_roadmap=roadmap is not None,
+                roadmap_pct=roadmap_pct,
+                category_scores=category_scores,
                 activities=activities,
                 last_active_at=max(last_times) if last_times else p.created_at,
                 composite_score=_compute_composite(
                     readiness,
-                    round(iv.avg, 1) if iv and iv.avg is not None else None,
-                    round(pr.avg, 1) if pr and pr.avg is not None else None,
+                    interview_avg,
+                    practice_avg,
                     activities,
                 ),
             )

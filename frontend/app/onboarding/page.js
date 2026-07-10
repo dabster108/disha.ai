@@ -393,6 +393,7 @@ export default function OnboardingPage() {
             <SkillMultiSelect
               skills={form.skills}
               parsedSkills={form.parsedSkills}
+              targetRole={form.target_role}
               onChange={(skills) => updateForm({ skills })}
             />
           </div>

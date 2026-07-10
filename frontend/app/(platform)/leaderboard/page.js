@@ -26,6 +26,36 @@ function ActivityPills({ activities }) {
   );
 }
 
+const CATEGORY_META = {
+  interview: { label: "Interview", max: 10 },
+  practice: { label: "Practice", max: 10 },
+  skill_gap: { label: "Gap", max: 100 },
+  roadmap: { label: "Roadmap", max: 100 },
+};
+
+function CategoryMiniBars({ scores }) {
+  if (!scores) return null;
+  return (
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+      {Object.entries(CATEGORY_META).map(([key, meta]) => {
+        const value = scores[key] || 0;
+        const pct = Math.min(100, Math.round((value / meta.max) * 100));
+        return (
+          <div key={key} className="min-w-[70px]">
+            <div className="mb-1 flex items-center justify-between text-[10px] text-secondary">
+              <span>{meta.label}</span>
+              <span className="font-bold text-on-surface">{value}</span>
+            </div>
+            <div className="h-1 w-full overflow-hidden rounded-full bg-surface-container-high">
+              <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function LeaderboardPage() {
   const { profileId } = useProfile();
   const [entries, setEntries] = useState([]);
@@ -121,6 +151,9 @@ export default function LeaderboardPage() {
                   </div>
                   <div className="mt-2">
                     <ActivityPills activities={entry.activities} />
+                  </div>
+                  <div className="mt-3 max-w-md">
+                    <CategoryMiniBars scores={entry.category_scores} />
                   </div>
                 </div>
 

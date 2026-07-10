@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
@@ -17,6 +17,7 @@ const MAX_SKILLS = 3;
 export default function PracticePage() {
   const { profileId, profile } = useProfile();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [suggested, setSuggested] = useState([]);
   const [track, setTrack] = useState(null);
@@ -39,7 +40,13 @@ export default function PracticePage() {
       ]);
       setSuggested(suggestion.suggested_skills);
       setTrack(suggestion.track);
-      setSelected(suggestion.suggested_skills.slice(0, MAX_SKILLS));
+      // A report card / dashboard link can preselect specific skills, e.g.
+      // /practice?skills=React,SQL — falls back to the usual suggestions.
+      const preselectParam = searchParams.get("skills");
+      const preselect = preselectParam
+        ? preselectParam.split(",").map((s) => s.trim()).filter(Boolean).slice(0, MAX_SKILLS)
+        : suggestion.suggested_skills.slice(0, MAX_SKILLS);
+      setSelected(preselect);
       setHistory(pastSessions);
     } catch (err) {
       setError(err);

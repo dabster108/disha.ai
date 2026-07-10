@@ -77,6 +77,10 @@ class Settings(BaseSettings):
     chroma_path: Path = BACKEND_DIR / "data" / "chroma"
     chroma_collection: str = "nepal_jobs"
 
+    # Synthetic Recommendation Lab — a public benchmark dataset, NOT live
+    # Nepal job postings. See app/services/synthetic_recommender.py.
+    synthetic_dataset_file: Path = BACKEND_DIR / "datasets" / "Job Datsset.csv"
+
 
 @lru_cache
 def get_settings() -> Settings:

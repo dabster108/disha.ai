@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 from app.config import get_settings
 from app.db.models import StudentProfile
 from app.services.llm_utils import call_structured
+from app.services.skills_catalog import filter_to_catalog, skills_for_role
 from scraper.normalize import TECH_KEYWORDS
 
 # Tech role names (whole-string match) reused/aligned with the interview service.
@@ -113,9 +114,15 @@ def skill_level_for_score(score: float) -> Literal["weak", "partial", "strong"]:
 
 
 def suggest_skills(profile: StudentProfile, *, limit: int = 5) -> tuple[list[str], str]:
-    """Skills to practise, drawn from the profile, tech skills first for tech tracks."""
+    """Skills to practise: the student's claimed skills (catalog-normalized),
+    tech skills first for tech tracks — falling back to the target role's
+    catalog skills when the profile has nothing that maps to the catalog."""
     track = detect_track(profile.target_role, profile.skills or [])
-    skills = [s for s in (profile.skills or []) if s and s.strip()]
+    skills = filter_to_catalog(profile.skills or [])
+
+    if not skills:
+        skills = skills_for_role(profile.target_role)[:limit]
+        return skills, track
 
     if track == "tech":
         tech = [s for s in skills if s.casefold() in _TECH_SKILLS]

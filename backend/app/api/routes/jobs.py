@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.config import get_settings
+from app.services import synthetic_recommender
 from app.services.job_matching import rank_jobs_for_student
 from app.services.skill_gap import load_gap_context
 
@@ -111,3 +112,34 @@ async def get_job_matches(
         jobs_analyzed=ctx.n_jobs,
         matches=matches,
     )
+
+
+# ---------------------------------------------------------------------------
+# Synthetic Recommendation Lab — demo/benchmark only, separate from the real
+# Nepal job corpus above. See app/services/synthetic_recommender.py.
+# ---------------------------------------------------------------------------
+
+
+class SyntheticRecommendRequest(BaseModel):
+    skills: list[str] = Field(default_factory=list)
+    top_k: int = Field(default=10, ge=1, le=50)
+
+
+class SyntheticEvalRequest(BaseModel):
+    sample_n: int = Field(default=500, ge=10, le=5000)
+
+
+@router.post("/synthetic-recommend")
+async def synthetic_recommend(payload: SyntheticRecommendRequest) -> dict:
+    try:
+        return synthetic_recommender.recommend(payload.skills, top_k=payload.top_k)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@router.post("/synthetic-eval")
+async def synthetic_eval(payload: SyntheticEvalRequest) -> dict:
+    try:
+        return synthetic_recommender.evaluate(sample_n=payload.sample_n)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc

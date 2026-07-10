@@ -25,6 +25,60 @@ function ConfidenceBadge({ level }) {
   );
 }
 
+function ReadinessGauge({ score, accuracyLevel }) {
+  const size = 108;
+  const stroke = 9;
+  const radius = (size - stroke) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const pct = Math.max(0, Math.min(100, score ?? 0));
+  const offset = circumference - (pct / 100) * circumference;
+  const accuracyStyle =
+    accuracyLevel === "High"
+      ? "bg-green-100 text-green-700"
+      : accuracyLevel === "Medium"
+        ? "bg-primary/10 text-primary"
+        : "bg-tertiary-fixed text-on-tertiary-fixed";
+
+  return (
+    <div className="flex items-center gap-4">
+      <div className="relative shrink-0" style={{ width: size, height: size }}>
+        <svg width={size} height={size} className="-rotate-90">
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={stroke}
+            className="text-surface-container-high"
+          />
+          <circle
+            cx={size / 2}
+            cy={size / 2}
+            r={radius}
+            fill="none"
+            stroke="currentColor"
+            strokeWidth={stroke}
+            strokeLinecap="round"
+            strokeDasharray={circumference}
+            strokeDashoffset={offset}
+            className="text-primary transition-all duration-700"
+          />
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="text-headline-sm font-bold text-on-surface">{pct}%</span>
+          <span className="text-[9px] uppercase tracking-wider text-secondary">Ready</span>
+        </div>
+      </div>
+      {accuracyLevel && (
+        <span className={`rounded-full px-3 py-1.5 text-label-sm font-bold uppercase tracking-wide ${accuracyStyle}`}>
+          {accuracyLevel} accuracy
+        </span>
+      )}
+    </div>
+  );
+}
+
 function ValidationPanel({ evidence, onRun, running }) {
   if (!evidence) return null;
   const { signals = {}, accuracy_level, confidence_legend = {}, checklist = [] } = evidence;
@@ -359,13 +413,8 @@ export default function SkillGapPage() {
               based on {gap.jobs_analyzed} live Nepal job postings.
             </p>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="text-right">
-              <div className="text-headline-lg text-primary">{gap.readiness_score}%</div>
-              <div className="text-label-sm uppercase tracking-widest text-secondary">
-                Market Readiness
-              </div>
-            </div>
+          <div className="flex items-center gap-6">
+            <ReadinessGauge score={gap.readiness_score} accuracyLevel={gap.evidence?.accuracy_level} />
             <button
               type="button"
               onClick={handleRun}
@@ -518,6 +567,12 @@ export default function SkillGapPage() {
                       {p.priority_score}
                     </span>
                   </div>
+                  <div className="mb-2 h-1.5 w-full overflow-hidden rounded-full bg-surface-container-high">
+                    <div
+                      className="h-full rounded-full bg-primary"
+                      style={{ width: `${Math.min(100, p.priority_score)}%` }}
+                    />
+                  </div>
                   <p className="text-body-md text-secondary">{p.reason}</p>
                 </div>
               ))}
@@ -530,6 +585,22 @@ export default function SkillGapPage() {
             >
               {generatingRoadmap ? "Generating..." : "Generate Roadmap"}
             </button>
+            {gap.priority_learn.length > 0 && (
+              <Link
+                href={`/practice?skills=${encodeURIComponent(gap.priority_learn.slice(0, 3).map((p) => p.skill).join(","))}`}
+                className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-outline-variant py-3.5 text-center text-label-md font-bold text-on-surface transition-colors hover:bg-white"
+              >
+                <Icon name="fitness_center" size={18} />
+                Practice Weak Skills
+              </Link>
+            )}
+            <Link
+              href="/jobs"
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border border-outline-variant py-3.5 text-center text-label-md font-bold text-on-surface transition-colors hover:bg-white"
+            >
+              <Icon name="work" size={18} />
+              View Job Matches
+            </Link>
           </div>
         </section>
 

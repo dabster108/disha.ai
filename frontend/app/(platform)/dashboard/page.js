@@ -34,13 +34,16 @@ import JobMatchCard from "@/components/dashboard/JobMatchCard";
 import QuickLinksRow from "@/components/dashboard/QuickLinksRow";
 import AnalyticsSection from "@/components/dashboard/AnalyticsSection";
 import JourneyRing from "@/components/dashboard/JourneyRing";
+import ScoreRankSection from "@/components/dashboard/ScoreRankSection";
 import { saveJob, loadTrackedJobs, subscribeTrackedJobs } from "@/lib/applicationsStore";
+import { getLeaderboard } from "@/lib/api";
 
 export default function DashboardPage() {
   const { profile, profileId, dashboard, dashboardLoading, refreshDashboard } = useProfile();
   const [error, setError] = useState(null);
   const [tracked, setTracked] = useState([]);
   const [savedIds, setSavedIds] = useState(new Set());
+  const [leaderboard, setLeaderboard] = useState(null);
 
   const data = dashboard;
   const loading = dashboardLoading && !dashboard;
@@ -55,6 +58,23 @@ export default function DashboardPage() {
     refreshTracked();
     return subscribeTrackedJobs(refreshTracked);
   }, [refreshTracked]);
+
+  useEffect(() => {
+    if (!profileId) return;
+    let cancelled = false;
+    getLeaderboard(profileId)
+      .then((res) => {
+        if (!cancelled) setLeaderboard(res);
+      })
+      .catch(() => {
+        if (!cancelled) setLeaderboard(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [profileId]);
+
+  const yourEntry = leaderboard?.entries?.find((e) => e.profile_id === profileId);
 
   if (loading) return <LoadingState label="Loading your dashboard..." />;
 
@@ -178,6 +198,12 @@ export default function DashboardPage() {
         summary={analyticsSummary}
         interviewAvg={interviewAvg}
         practiceAvg={practiceAvg}
+      />
+
+      <ScoreRankSection
+        yourRank={leaderboard?.your_rank}
+        totalEntries={leaderboard?.entries?.length}
+        categoryScores={yourEntry?.category_scores}
       />
 
       {/* Roadmap + skill gap snapshot */}

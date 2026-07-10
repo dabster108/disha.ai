@@ -16,7 +16,8 @@ export function formatInterviewSummary(session) {
   return lines.join("\n").trim();
 }
 
-export const INTERVIEW_DURATION_OPTIONS = [5, 10, 15, 30];
+// TEMP: 1-minute option added for testing — remove once QA is done.
+export const INTERVIEW_DURATION_OPTIONS = [1, 5, 10, 15, 30];
 
 const TECH_ROLES = new Set([
   "backend developer",

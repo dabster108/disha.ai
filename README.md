@@ -1,232 +1,227 @@
-# Disha AI 
+<p align="center">
+  <img src="frontend/components/images/logo.png" alt="DISHA AI Logo" width="180" />
+</p>
 
-**An Advanced Agentic RAG + LangGraph Career Navigation & Preparation Platform for Nepali Students.**
+<h1 align="center">DISHA AI</h1>
 
-> *Navigate your direction. Leverage Nepal's real job market data. Build your future.*
+<p align="center">
+  <em>Navigate your direction. Nepal job market. Build your future.</em>
+</p>
 
-Disha AI is a state-of-the-art career guidance platform designed specifically for students in Nepal. Unlike general-purpose global career advisors, Disha connects directly to the local job ecosystem. It parses student profiles, administers adaptive AI mock interviews, verifies skills through code/scenario challenges, conducts hybrid vector-based retrieval on live Nepali job postings, and uses a LangGraph-powered multi-agent system to discover skill gaps and construct personalized week-by-week learning paths.
-
----
-
-## 🌟 Key Features
-
-*   **Agentic RAG Engine**: Daily scrapers crawl local portals (KamKhoj, MeroJob, KumariJob, etc.) using Crawl4AI & Playwright, embed descriptions locally with `BAAI/bge-small-en-v1.5`, and ingest them into a ChromaDB vector store.
-*   **LangGraph Orchestrator**: Manages stateful agent transitions across career discovery phases (`intake` → `gap assessment` → `roadmap generation`) with conditional routing.
-*   **Intelligent CV Parsing**: Resume extraction utilizing Mistral OCR (`mistral-ocr-2512`) combined with Groq (`llama-3.1-8b-instant`) to capture granular skills.
-*   **Adaptive Mock Interviews**: Real-time voice/text interactive interviews that adjust dynamically to student responses, providing objective grading.
-*   **Verified Skill Challenges**: Real coding and scenario-based tests to benchmark capabilities against live job market demands.
-*   **Personalized Roadmaps**: Curated, time-and-budget-constrained educational roadmaps mapped directly to local career targets.
+<p align="center">
+  Next.js 16 · FastAPI · LangGraph · Chroma · Neon Postgres
+</p>
 
 ---
 
-## 🏗️ Architecture & Data Flow
+## What is DISHA AI
 
-Disha AI uses a stateful agent topology built on **LangGraph** coordinated with a multi-layered **RAG (Retrieval-Augged Generation)** pipeline.
+DISHA AI is a career-navigation platform for Nepali students and fresh graduates. It takes a
+student from CV to job-ready, grounded in **real, live Nepal job market data** rather than
+generic global career advice:
 
-```mermaid
-flowchart TB
-    subgraph StudentInputs [1. Student Touchpoints & Inputs]
-        CV[CV Upload / PDF Parser]
-        INT[Adaptive Mock Interview]
-        PRAC[Skill Coding/Scenario Practice]
-    end
-
-    subgraph Pipeline [2. Local Job Market RAG Pipeline]
-        SCR[Daily Scraper <br>Crawl4AI + Playwright]
-        JSON[jobs.json Raw Store]
-        CHR[Chroma Vector Store <br>BAAI/bge-small-en-v1.5]
-        SCR --> JSON --> CHR
-    end
-
-    subgraph Orchestrator [3. LangGraph Orchestration Engine]
-        direction TB
-        START_NODE((START))
-        GAP[Gap Agent Node <br>Computes Skill Gaps]
-        ROAD[Roadmap Agent Node <br>Generates Timeline]
-        END_NODE(((END)))
-
-        START_NODE --> GAP
-        GAP --> ROAD
-        ROAD --> END_NODE
-    end
-
-    subgraph Storage [4. Persistent Data Layers]
-        PG[(Neon Serverless Postgres)]
-        CH[(Chroma Vector DB)]
-    end
-
-    CV -->|Extracts Skills| PG
-    INT -->|Saves Turns| PG
-    PRAC -->|Saves Scores| PG
-    CHR -->|Embeddings| CH
-
-    PG -->|Reads Student State| GAP
-    CH -->|Semantic Job Matching| GAP
-    GAP -->|Writes Skill Gap| PG
-    ROAD -->|Writes Custom Roadmap| PG
+```
+CV upload → canonical skills catalog → voice mock interview → skill practice game
+   → skill gap vs. live Nepal jobs (RAG) → LangGraph orchestrator → personalized roadmap
+   → explainable job matches → leaderboard → admin human verification
 ```
 
-### 🧠 Agentic RAG & LangGraph Workflows
-1.  **State Management (`CareerState`)**:
-    *   Tracks user parameters: `student_skills`, `target_role`, `location`, `time_per_week`, and `budget`.
-    *   Saves outputs: `skill_gap` details and the final week-by-week `roadmap`.
-2.  **Gap Assessment Agent (`gap_node`)**:
-    *   Queries ChromaDB using local sentence-transformer embeddings to fetch real-time local job postings matching `target_role`.
-    *   Compares the student's current skills (retrieved from profile/CV/interviews) against the market-required skills using LLM synthesis.
-    *   Compiles a complete skill gap report identifying missing libraries, tools, frameworks, and concepts.
-3.  **Roadmap Agent (`roadmap_node`)**:
-    *   Takes the computed `skill_gap` list and designs a structured learning roadmap.
-    *   Adapts the plan to the student's constraints (e.g., *15 hours/week, 0 budget* vs. *40 hours/week, 5000 NPR budget*).
+Every claim the platform makes about a student is backed by evidence: skills come from a
+fixed catalog (not free text), the skill gap report cites real job counts from scraped
+postings, and an interview or practice session must actually happen before a skill is called
+"verified."
 
----
+## Architecture
 
-## 📂 Repository Layout
+<p align="center">
+  <img src="frontend/components/images/architecture.jpg" alt="DISHA AI Architecture" width="900" />
+</p>
+
+Reading the diagram top to bottom, mapped to what's actually in this repo:
+
+**Clients** — the Next.js 16 student app (`frontend/app/(platform)/*`) and a separate
+key-gated admin panel (`frontend/app/admin/*`), both calling the same FastAPI backend.
+
+**API layer** — one FastAPI app, one router per domain (`backend/app/api/routes/`):
+`profile`, `gap`, `jobs`, `interview`, `practice`, `roadmap`, `skills`, `voice`, `leaderboard`,
+`dashboard`, `admin`, plus `health`. See [API map](#api-map) below.
+
+**Orchestrator (LangGraph)** — `backend/app/orchestrator/` wires the career pipeline as a
+real, compiled `StateGraph`, not just a diagram:
+
+```
+START → intake → gap → [route_after_gap] → roadmap? → save → END
+```
+
+- `intake` (no LLM) — loads the profile, populates `student_skills`, `target_role`,
+  `location`, `time_per_week`, `budget` into `CareerState`.
+- `gap` — merges four signals (claimed skills, market demand, interview proof, practice
+  proof) into one report, plus an optional Groq narrative and `classify_gap_size` (the
+  large/small roadmap-depth decision, computed exactly once here).
+- `route_after_gap` — `error` → `END`; `run_roadmap=False` → straight to `save` (snapshot
+  only); otherwise → `roadmap`.
+- `roadmap` — generates a week-by-week plan sized by `gap_size`.
+- `save` (no LLM) — persists the skill-gap snapshot (and roadmap, if generated).
+
+`POST /api/gap` and `POST /api/roadmap` call the same underlying service functions directly
+(to avoid re-running work across two already-tested endpoints) — the graph itself is the
+independently-runnable reference pipeline:
+
+```bash
+uv run python -m app.orchestrator.run --profile-id <uuid>
+```
+
+**Gap agent** = deterministic 4-signal merge (`app/services/skill_gap.py`) + an optional Groq
+narrative that is only ever allowed to explain numbers already computed — it cannot invent
+skills, jobs, or scores. **Roadmap agent** = a plan generated from the gap report plus curated
+learning resources. **Interview** and **practice** are separate API-driven agents (Mistral and
+Groq respectively) whose scored results feed back into the gap agent as verification signals.
+
+**RAG pipeline** — `scrape (merojob/kamkhoj/kumarijob) → data/jobs.json → BGE embeddings
+(BAAI/bge-small-en-v1.5) → Chroma → search_jobs() / multi-factor job matching`. This is the
+one and only source of "live Nepal jobs" shown to students.
+
+**Data layer** — Neon Postgres (profiles, sessions, snapshots, roadmaps, scrape runs) +
+Chroma (job embeddings) + `backend/app/data/skills_catalog.json` (the canonical skill list
+used everywhere a skill is entered, suggested, or scored).
+
+**External services** — Groq (skill-gap narrative, CV skill extraction, practice grading),
+Mistral (resume OCR + interview LLM, on separate keys/quotas), Google Cloud TTS/STT (voice
+interview, with an edge-tts/text-only fallback), and the job portals themselves.
+
+> **Note:** `frontend/app/(platform)/jobs/lab` and `backend/datasets/Job Datsset.csv` are a
+> separate **synthetic benchmark lab** for demoing content-based scoring — not live Nepal
+> jobs. `POST /api/jobs/match` and the main `/jobs` page are the real thing, backed by Chroma.
+
+## Key Features
+
+| Feature | What it does |
+|---|---|
+| **Canonical skills catalog** | A fixed, versioned skill list per role (`GET /api/skills`) — onboarding, CV parsing, practice, skill gap, and job matching all normalize through it, so "ReactJS"/"React.js"/"React" are always the same skill. |
+| **CV OCR + onboarding** | Mistral OCR extracts text from an uploaded PDF; Groq structures it into skills/education/experience for the student to review and confirm — never auto-saved unverified. |
+| **Voice mock interview + report card** | A chat-style adaptive interview (Mistral) with Google TTS/STT, an off-topic/jailbreak guard that refuses to go off-script, and a detailed report card (per-turn scores, dimension breakdown, strengths/weaknesses, what to practice next). |
+| **Skill practice game** | Timed coding or scenario challenges per skill, AI-graded, feeding `verified_strong_skills` / `verified_weak_skills` back into the gap report. |
+| **Skill gap with evidence** | Four-signal merge (claimed / market / interview / practice) with a validation panel showing exactly which signals back each verdict and an accuracy level (High/Medium/Low). |
+| **Multi-factor job matching** | Explainable scoring across skills, role similarity, seniority, domain, education, and location — with role-conflict rules so "AI Engineer" doesn't match "AI Instructor" and generic keywords don't inflate scores. |
+| **Roadmap + auto-progress** | A personalized, budget/time-constrained learning path; opening a resource starts a dwell timer that prompts to mark it complete instead of requiring a blind manual checkbox. |
+| **Leaderboard category scores** | Real per-category scores (interview, practice, skill gap, roadmap %) — no synthetic users, only actual completed sessions. |
+| **Admin panel** | Key-gated `/admin`: platform stats, user list, a full per-student verification dossier, and the scrape pipeline controls. |
+
+## Monorepo Structure
 
 ```
 disha.ai/
-├── backend/                       # FastAPI Engine, LangGraph Agents, Scrapers, RAG
-│   ├── app/
-│   │   ├── api/
-│   │   │   └── routes/            # REST API endpoints (profile, interview, practice, RAG)
-│   │   ├── db/                    # SQLAlchemy models & Neon DB sessions
-│   │   ├── orchestrator/          # LangGraph agent definitions
-│   │   │   ├── nodes/             # Specialist agent nodes (gap, roadmap)
-│   │   │   ├── graph.py           # StateGraph setup & compilation
-│   │   │   └── state.py           # TypedDict CareerState schema
-│   │   ├── rag/                   # Chroma DB ingestion, BGE embeddings, search scripts
-│   │   └── services/              # Business logic (CV parser, voice services, scoring)
-│   ├── scraper/                   # Crawl4AI web scraper & portal crawlers
-│   ├── migrations/                # Alembic database migrations
-│   ├── scripts/                   # CLI tools & job refresh scripts
-│   └── data/                      # jobs.json cache & chroma DB files (Gitignored)
-│
-└── frontend/                      # Next.js 16 Web Dashboard
-    ├── app/                       # App Router layouts, pages, and components
-    ├── public/                    # Static assets
-    └── package.json               # NPM configuration
+  frontend/   # Next.js 16 (App Router) — student app + /admin
+  backend/    # FastAPI + LangGraph orchestrator + scraper + RAG
+  README.md   # this file
 ```
 
----
+See [backend/README.md](backend/README.md) and [frontend/README.md](frontend/README.md) for
+the full per-side layout.
 
-## 🛠️ Technology Stack
+## Quick Start
 
-| Category | Technology | Role / Purpose |
-| :--- | :--- | :--- |
-| **Backend Core** | Python 3.14 + FastAPI | High-performance async API server |
-| **Package Manager** | `uv` | Superfast dependency syncing & virtualenv management |
-| **Orchestration** | LangGraph | State management and agent routing |
-| **Agent LLM** | Groq (`llama-3.1-8b-instant`) | Fast inference for structured skills, Q&A, and scoring |
-| **Vector DB** | ChromaDB | Local vector indexing of scraped job descriptions |
-| **Embeddings** | `sentence-transformers` | BAAI/bge-small-en-v1.5 model for semantic query mapping |
-| **Web Scraping** | Crawl4AI + Playwright | Daily crawling of dynamic single-page applications |
-| **OCR Service** | Mistral OCR | High-accuracy parsing of PDF student CVs |
-| **Voice Services** | Google Cloud Speech-to-Text & Text-to-Speech | Hands-free verbal mock interview options |
-| **Database** | Neon Postgres + SQLAlchemy (asyncpg) | Relational store for users, profiles, and history |
-| **Frontend Core** | Next.js 16 (React 19) | Modern, interactive career dashboard UI |
-| **Styling** | Tailwind CSS 4 | Responsive, custom components and styling |
+### Backend
 
----
-
-## ⚡ Quick Start Guide
-
-### 📋 Prerequisites
-- **Python 3.14+** (with `uv` installed)
-- **Node.js 20+** (frontend only)
-- **Neon Postgres** database instance
-- Credentials/API keys for: **Groq** (required), **Mistral** (CV + interview), optional **Google Cloud** (voice)
-
-> **Full step-by-step setup:** see [SETUP.md](SETUP.md)
-
-### 1. Setting Up the Backend
-
-1.  Navigate to the backend directory and configure environmental variables:
-    ```bash
-    cd backend
-    cp .env.example .env
-    ```
-2.  Populate your `.env` file (minimum: `GROQ_API_KEY` + `DATABASE_URL`). See [backend/.env.example](backend/.env.example).
-3.  Install python dependencies and initialize database schemas:
-    ```bash
-    uv sync
-    uv run playwright install chromium
-    uv run alembic upgrade head
-    ```
-4.  Run the local FastAPI server:
-    ```bash
-    uv run uvicorn app.main:app --reload --port 8000
-    ```
-    *API documentation will be available at: http://127.0.0.1:8000/docs*
-
-### 2. Scraping & Ingesting Job Data (First Run)
-
-To populate the local vector database with real Nepali job listings:
 ```bash
 cd backend
-# Set cache directory for Crawl4AI
+cp .env.example .env
+# fill in: DATABASE_URL, GROQ_API_KEY (required)
+# MISTRAL_API_KEY, MISTRAL_API_KEY2, ADMIN_API_KEY, GOOGLE_APPLICATION_CREDENTIALS (optional)
+
+uv sync
+uv run playwright install chromium
+uv run alembic upgrade head
+
+# optional — populate real Nepal job data (needed for skill gap / job matching to return results)
 export CRAWL4AI_BASE_DIRECTORY=./.crawl4ai
+./scripts/refresh_jobs.sh   # scrape + Chroma ingest in one step
 
-# Run scraper to collect raw postings
-uv run python -m scraper.run --mode hybrid --max-per-source 150 --log-db --log-file
-
-# Ingest and embed listings into ChromaDB
-uv run python -m app.rag.ingest --reset
-```
-*Tip: You can also use the helper script: `./scripts/refresh_jobs.sh 100`*
-
-### 3. Setting Up the Frontend
-
-1.  Navigate to the frontend directory:
-    ```bash
-    cd ../frontend
-    ```
-2.  Install packages and start the Next.js development server:
-    ```bash
-    npm install
-    npm run dev
-    ```
-    *The frontend dashboard will run at: http://localhost:3000*
-
----
-
-## 📡 API Reference Checklist
-
-### Student Endpoints
-*   `POST /api/profile` - Creates/updates the student's target role, constraints, and current skills.
-*   `POST /api/profile/upload-resume` - Uploads a PDF CV, processes with Mistral OCR, and extracts skills using Groq.
-*   `POST /api/interview/start` - Launches an adaptive mock interview session based on target skills.
-*   `POST /api/interview/answer` - Evaluates the student's voice/text response, saves scores, and returns the next question.
-*   `POST /api/practice/skills/suggest` - Analyzes profile and market data to recommend priority practice subjects.
-*   `POST /api/practice/start` - Begins a practice session with tailored coding tasks or scenario challenges.
-*   `POST /api/practice/{id}/submit` - Evaluates challenge submissions.
-*   `POST /api/gap` - Triggers the LangGraph pipeline to synthesize CV, interview performance, and practice results against ChromaDB local job listings.
-*   `POST /api/roadmap` - Generates a week-by-week learning roadmap based on the computed gaps and budget constraints.
-
-### Admin & Telemetry Endpoints
-*   `POST /api/admin/scrape` - Triggers background scrapers (requires `X-Admin-Key` header).
-*   `GET /api/admin/scrape/runs` - Lists telemetry and logs from recent scraper runs.
-
----
-
-## 🚀 The Student Roadmap Journey
-
-```
-[ Upload CV or input skills ]
-            │
-            ▼
-[ Adaptive Mock Interview ] ──> Evaluates soft skills, architecture, & logic
-            │
-            ▼
-[ Code / Scenario Challenges ] ──> Benchmarks hard execution & syntax skills
-            │
-            ▼
-[ Compute Skill Gap (LangGraph) ] ──> Queries ChromaDB for local Nepali market demands
-            │
-            ▼
-[ Personalized Learning Roadmap ] ──> Generates weeks-based tasks within budget & time
+uv run uvicorn app.main:app --reload --port 8000
 ```
 
----
+API docs: http://127.0.0.1:8000/docs
 
-## 🛡️ License
+### Frontend
 
-Private academic project. All rights reserved. For permission or usage inquiries, contact the repository owner.
+```bash
+cd frontend
+cp .env.example .env.local   # NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
+npm install
+npm run dev
+```
+
+Open http://localhost:3000
+
+## Environment Variables
+
+**Backend** (`backend/.env`, see `backend/.env.example`):
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `DATABASE_URL` | Yes | Neon Postgres connection string |
+| `GROQ_API_KEY` | Yes | Skill-gap narrative, CV skill extraction, practice grading |
+| `MISTRAL_API_KEY` | Recommended | Resume OCR (Mistral OCR 3) |
+| `MISTRAL_API_KEY2` | Recommended | Mock interview LLM — separate key/quota from OCR |
+| `ADMIN_API_KEY` | Recommended | Protects all `/api/admin/*` routes (`X-Admin-Key` header) |
+| `GOOGLE_APPLICATION_CREDENTIALS` | Optional | Voice interview TTS/STT — falls back to edge-tts + text-only without it |
+| `GROQ_API_KEY2` | Optional | Separate quota for voice STT (Whisper) |
+| `HF_TOKEN` | Optional | Only needed if HuggingFace rate-limits anonymous embedding-model downloads |
+
+**Frontend** (`frontend/.env.local`, see `frontend/.env.example`):
+
+| Variable | Required | Purpose |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | Yes | Backend base URL (default `http://127.0.0.1:8000`) |
+
+No real secrets are committed anywhere in this repo — both `.env.example` files ship with
+empty/placeholder values only.
+
+## API Map
+
+High level, by domain (full request/response shapes in [backend/README.md](backend/README.md)
+and the live OpenAPI docs):
+
+| Domain | Prefix | Examples |
+|---|---|---|
+| Profile | `/api/profile` | create/update profile, resume upload |
+| Skills | `/api/skills` | canonical catalog, per-role skill list |
+| Skill gap | `/api/gap` | combined report, market-only comparison, history |
+| Jobs | `/api/jobs` | multi-factor match, corpus status, synthetic lab endpoints |
+| Roadmap | `/api/roadmap` | generate plan, task/resource/node progress |
+| Interview | `/api/interview` | start, answer (evaluate + next question), history |
+| Practice | `/api/practice` | suggest skills, start, submit, history |
+| Voice | `/api/voice` | TTS synthesis, STT transcription |
+| Leaderboard | `/api/leaderboard` | ranked entries + category scores |
+| Dashboard | `/api/dashboard` | one aggregated payload for the student dashboard |
+| Admin | `/api/admin` | stats, users, user dossier, verification, scrape control |
+
+## Student Journey
+
+```
+Onboarding (CV or manual) → Dashboard → Mock Interview / Skill Practice
+   → Skill Gap Analysis → Personalized Roadmap → Job Matches → Leaderboard
+```
+
+Every step after onboarding reads real data computed by the steps before it — the roadmap is
+built from the gap report, the gap report is strengthened by interview/practice results, and
+job matches use the same catalog-normalized skills throughout.
+
+## Admin
+
+`/admin` is a separate, key-gated panel (not part of the student sidebar). On first visit it
+asks for the admin key once, stores it in `sessionStorage`, and sends it as `X-Admin-Key` on
+every `/api/admin/*` call. Set `ADMIN_API_KEY` in `backend/.env` to enable it — endpoints
+return `503` until it's configured. No separate auth system; this is intentionally the
+lightest gate that still keeps the panel off the public student surface.
+
+## Docs
+
+- [backend/README.md](backend/README.md) — backend architecture, orchestrator, RAG, scraper, all endpoints
+- [frontend/README.md](frontend/README.md) — pages, session model, voice interview notes
+- [backend/OPTIMIZATION_NOTES.md](backend/OPTIMIZATION_NOTES.md) — backend audit: bugs fixed, deliberate non-fixes
+
+## License
+
+Private academic project. All rights reserved. For permission or usage inquiries, contact the
+repository owner.

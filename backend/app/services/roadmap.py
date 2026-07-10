@@ -517,3 +517,33 @@ def seed_path_progress(profile: StudentProfile, gap_data: dict, plan: SkillPathP
         "completed": [],
         "resources_completed": [],
     }
+
+
+def compute_roadmap_progress_pct(roadmap) -> float:
+    """0-100 completion percentage — mirrors frontend lib/journeyState.js's
+    computeRoadmapProgress so the leaderboard/admin's number matches what the
+    student sees on /roadmap and /dashboard exactly."""
+    if roadmap is None:
+        return 0.0
+
+    path = roadmap.path or {}
+    phases = path.get("phases") if isinstance(path, dict) else None
+    if isinstance(phases, list) and phases:
+        all_nodes = [node for phase in phases for node in (phase.get("nodes") or [])]
+        completed_ids = set((roadmap.progress or {}).get("completed_nodes") or [])
+        total = len(all_nodes)
+        done = sum(1 for node in all_nodes if node.get("id") in completed_ids)
+        return round((done / total) * 100, 1) if total else 0.0
+
+    weeks = roadmap.weeks or []
+    if not weeks:
+        return 0.0
+    completed = {(e["week"], e["task_index"]) for e in (roadmap.progress or {}).get("completed") or []}
+    total = sum(len(w.get("tasks") or []) for w in weeks)
+    done = sum(
+        1
+        for w in weeks
+        for i in range(len(w.get("tasks") or []))
+        if (w.get("week"), i) in completed
+    )
+    return round((done / total) * 100, 1) if total else 0.0

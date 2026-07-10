@@ -30,6 +30,7 @@ from app.db.models import InterviewSession, PracticeSession, StudentProfile
 from app.rag.documents import infer_role_category
 from app.rag.retriever import search_jobs
 from app.services.llm_utils import call_structured
+from app.services.skills_catalog import normalize_skill as catalog_normalize_skill
 
 # --------------------------------------------------------------------------
 # Skill name normalization
@@ -59,7 +60,17 @@ _SKILL_ALIASES: dict[str, str] = {
 
 
 def normalize_skill_name(skill: str) -> str:
-    """Casefold + collapse whitespace + resolve common aliases for matching."""
+    """Casefold + collapse whitespace + resolve common aliases for matching.
+
+    Prefers the canonical skills-catalog name when the skill is known there
+    (so a claimed CV skill and a scraped job skill that both mean "React"
+    converge on the same key). Anything outside the catalog — most real
+    scraped-job skill text, which is far broader than the curated catalog —
+    still normalizes via the local alias map below, exactly as before.
+    """
+    catalog_hit = catalog_normalize_skill(skill)
+    if catalog_hit:
+        return catalog_hit.casefold()
     key = re.sub(r"\s+", " ", (skill or "").strip().casefold()).rstrip(".")
     return _SKILL_ALIASES.get(key, key)
 

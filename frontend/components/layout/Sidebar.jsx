@@ -1,9 +1,11 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import { isActivePath, navItems } from "@/lib/navigation";
+import logo from "@/components/images/logo.png";
 
 export default function Sidebar() {
   const pathname = usePathname();
@@ -11,9 +13,12 @@ export default function Sidebar() {
   return (
     <aside className="fixed left-0 top-0 z-50 flex h-screen w-64 flex-col border-r border-outline-variant bg-surface px-4 py-6">
       <div className="mb-10 px-2">
-        <Link href="/dashboard" className="block">
-          <h1 className="text-headline-md font-bold text-primary">DISHA AI</h1>
-          <p className="text-label-md text-secondary">Student Workspace</p>
+        <Link href="/dashboard" className="flex items-center gap-2.5">
+          <Image src={logo} alt="DISHA AI" width={36} height={36} className="rounded-lg" priority />
+          <div>
+            <h1 className="text-headline-md font-bold text-primary">DISHA AI</h1>
+            <p className="text-label-md text-secondary">Student Workspace</p>
+          </div>
         </Link>
       </div>
 

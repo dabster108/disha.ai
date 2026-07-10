@@ -8,6 +8,8 @@ import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { useProfile } from "@/context/ProfileContext";
 import { getLatestRoadmap, isNotFound, updateRoadmapNodeProgress, updateRoadmapProgress } from "@/lib/api";
+import StudyTrackerChip from "@/components/learning/StudyTrackerChip";
+import { useResourceStudyTracker } from "@/hooks/useResourceStudyTracker";
 
 const RESOURCE_ICON = {
   video: "play_circle",
@@ -124,10 +126,12 @@ export default function LearningPage() {
   const nodeQueue = useMemo(() => buildNodeQueue(roadmap), [roadmap]);
   const taskQueue = useMemo(() => buildTaskQueue(roadmap), [roadmap]);
 
-  const toggleNode = async (item) => {
-    setToggling(item.node.id);
+  const toggleNode = async (item, forceDone) => {
+    const nodeId = item.node ? item.node.id : item;
+    const markDone = forceDone ?? !item.isCompleted;
+    setToggling(nodeId);
     try {
-      const updated = await updateRoadmapNodeProgress(profileId, item.node.id, !item.isCompleted);
+      const updated = await updateRoadmapNodeProgress(profileId, nodeId, markDone);
       setRoadmap(updated);
     } catch (err) {
       setError(err);
@@ -136,17 +140,12 @@ export default function LearningPage() {
     }
   };
 
-  const toggleTask = async (item) => {
+  const toggleTask = async (item, forceDone) => {
     const key = `${item.week}:${item.taskIndex}:${item.resourceIndex ?? "task"}`;
     setToggling(key);
+    const markDone = forceDone ?? (!item.resource ? !item.taskComplete : !item.resourceComplete);
     try {
-      const updated = await updateRoadmapProgress(
-        profileId,
-        item.week,
-        item.taskIndex,
-        !item.resource ? !item.taskComplete : !item.resourceComplete,
-        item.resourceIndex
-      );
+      const updated = await updateRoadmapProgress(profileId, item.week, item.taskIndex, markDone, item.resourceIndex);
       setRoadmap(updated);
     } catch (err) {
       setError(err);
@@ -154,6 +153,18 @@ export default function LearningPage() {
       setToggling(null);
     }
   };
+
+  // Open a resource in a new tab, track dwell time, mark progress complete
+  // on confirm or manual "Mark done" — same flow as /roadmap.
+  const studyTracker = useResourceStudyTracker({
+    onComplete: async (tracked) => {
+      if (tracked.nodeItem) {
+        await toggleNode(tracked.nodeItem, true);
+      } else if (tracked.taskItem) {
+        await toggleTask(tracked.taskItem, true);
+      }
+    },
+  });
 
   if (loading) return <LoadingState label="Loading your learning queue..." />;
 
@@ -267,6 +278,13 @@ export default function LearningPage() {
                       href={firstResource.url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={() =>
+                        studyTracker.startTracking({
+                          key: `node:${item.node.id}`,
+                          title: firstResource.title,
+                          nodeItem: item,
+                        })
+                      }
                       className="flex shrink-0 items-center gap-1 rounded-xl bg-primary px-4 py-2 text-label-md font-bold text-on-primary hover:bg-primary-container"
                     >
                       <Icon name={RESOURCE_ICON[firstResource.type] || "menu_book"} size={18} />
@@ -325,6 +343,13 @@ export default function LearningPage() {
                       href={item.resource.url}
                       target="_blank"
                       rel="noopener noreferrer"
+                      onClick={() =>
+                        studyTracker.startTracking({
+                          key,
+                          title: item.resource.title,
+                          taskItem: item,
+                        })
+                      }
                       className="flex shrink-0 items-center gap-1 rounded-xl bg-primary px-4 py-2 text-label-md font-bold text-on-primary hover:bg-primary-container"
                     >
                       <Icon name={RESOURCE_ICON[item.resource.type] || "menu_book"} size={18} />
@@ -346,6 +371,15 @@ export default function LearningPage() {
           <Icon name="arrow_forward" size={16} />
         </Link>
       </div>
+
+      <StudyTrackerChip
+        active={studyTracker.active}
+        pendingConfirm={studyTracker.pendingConfirm}
+        onMarkDone={studyTracker.markDoneNow}
+        onDismiss={studyTracker.dismiss}
+        onConfirmYes={studyTracker.confirmYes}
+        onConfirmNo={studyTracker.confirmNo}
+      />
     </div>
   );
 }

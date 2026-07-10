@@ -9,18 +9,29 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.api.deps import get_db
 from app.config import get_settings
-from app.db.models import ScrapeRun
+from app.db.models import (
+    InterviewSession,
+    PracticeSession,
+    Roadmap,
+    ScrapeRun,
+    SkillGapSnapshot,
+    StudentProfile,
+)
 from app.db.session import async_session_factory
+from app.services.job_matching import rank_jobs_for_student
+from app.services.roadmap import compute_roadmap_progress_pct
+from app.services.skill_gap import load_gap_context
 from scraper.scraper import MODES, SOURCES
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -149,3 +160,327 @@ async def get_run(scrape_run_id: uuid.UUID, db: AsyncSession = Depends(get_db)) 
     if run is None:
         raise HTTPException(status_code=404, detail="Scrape run not found")
     return run
+
+
+# ---------------------------------------------------------------------------
+# Admin dashboard — stats, user list, per-user verification dossier.
+# Read-only aggregation of existing tables/services; no new business logic.
+# ---------------------------------------------------------------------------
+
+
+class AdminStats(BaseModel):
+    profile_count: int
+    gap_run_count: int
+    interview_count: int
+    interview_completed_count: int
+    practice_count: int
+    practice_completed_count: int
+    sessions_today: int
+    latest_scrape: ScrapeRunOut | None
+    jobs_indexed: int
+
+
+@router.get("/stats", response_model=AdminStats, dependencies=[Depends(require_admin)])
+async def admin_stats(db: AsyncSession = Depends(get_db)) -> AdminStats:
+    today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+
+    profile_count = (await db.execute(select(func.count(StudentProfile.id)))).scalar_one()
+    gap_run_count = (await db.execute(select(func.count(SkillGapSnapshot.id)))).scalar_one()
+    interview_count = (await db.execute(select(func.count(InterviewSession.id)))).scalar_one()
+    interview_completed_count = (
+        await db.execute(select(func.count(InterviewSession.id)).where(InterviewSession.status == "completed"))
+    ).scalar_one()
+    practice_count = (await db.execute(select(func.count(PracticeSession.id)))).scalar_one()
+    practice_completed_count = (
+        await db.execute(select(func.count(PracticeSession.id)).where(PracticeSession.status == "completed"))
+    ).scalar_one()
+
+    sessions_today = (
+        await db.execute(
+            select(func.count(InterviewSession.id)).where(InterviewSession.started_at >= today_start)
+        )
+    ).scalar_one() + (
+        await db.execute(
+            select(func.count(PracticeSession.id)).where(PracticeSession.started_at >= today_start)
+        )
+    ).scalar_one()
+
+    latest_run = (
+        await db.execute(select(ScrapeRun).order_by(ScrapeRun.scraped_at.desc()).limit(1))
+    ).scalar_one_or_none()
+
+    from app.config import get_settings as _get_settings
+
+    settings = _get_settings()
+    jobs_indexed = 0
+    if settings.jobs_file.exists():
+        import json
+
+        jobs_indexed = len(json.loads(settings.jobs_file.read_text(encoding="utf-8")).get("jobs", []))
+
+    return AdminStats(
+        profile_count=profile_count,
+        gap_run_count=gap_run_count,
+        interview_count=interview_count,
+        interview_completed_count=interview_completed_count,
+        practice_count=practice_count,
+        practice_completed_count=practice_completed_count,
+        sessions_today=sessions_today,
+        latest_scrape=latest_run,
+        jobs_indexed=jobs_indexed,
+    )
+
+
+class AdminUserSummary(BaseModel):
+    id: uuid.UUID
+    full_name: str | None
+    email: str | None
+    target_role: str
+    created_at: datetime
+    readiness_score: float | None = None
+    has_gap: bool = False
+    has_interview: bool = False
+    has_practice: bool = False
+    has_roadmap: bool = False
+    verification_status: str | None = None
+
+
+@router.get("/users", response_model=list[AdminUserSummary], dependencies=[Depends(require_admin)])
+async def admin_list_users(
+    limit: int = 50, q: str | None = None, db: AsyncSession = Depends(get_db)
+) -> list[AdminUserSummary]:
+    limit = min(max(limit, 1), 200)
+    query = select(StudentProfile).order_by(StudentProfile.created_at.desc()).limit(limit)
+    if q and q.strip():
+        pattern = f"%{q.strip()}%"
+        query = query.where(
+            or_(StudentProfile.full_name.ilike(pattern), StudentProfile.email.ilike(pattern), StudentProfile.target_role.ilike(pattern))
+        )
+    profiles = (await db.execute(query)).scalars().all()
+    if not profiles:
+        return []
+
+    profile_ids = [p.id for p in profiles]
+
+    gap_rows = (
+        await db.execute(
+            select(SkillGapSnapshot)
+            .where(SkillGapSnapshot.profile_id.in_(profile_ids))
+            .order_by(SkillGapSnapshot.profile_id, SkillGapSnapshot.created_at.desc())
+        )
+    ).scalars().all()
+    latest_gap: dict[uuid.UUID, SkillGapSnapshot] = {}
+    for row in gap_rows:
+        latest_gap.setdefault(row.profile_id, row)
+
+    interview_profiles = set(
+        (await db.execute(select(InterviewSession.profile_id).where(InterviewSession.profile_id.in_(profile_ids)))).scalars()
+    )
+    practice_profiles = set(
+        (await db.execute(select(PracticeSession.profile_id).where(PracticeSession.profile_id.in_(profile_ids)))).scalars()
+    )
+    roadmap_profiles = set(
+        (await db.execute(select(Roadmap.profile_id).where(Roadmap.profile_id.in_(profile_ids)))).scalars()
+    )
+
+    out: list[AdminUserSummary] = []
+    for p in profiles:
+        gap = latest_gap.get(p.id)
+        out.append(
+            AdminUserSummary(
+                id=p.id,
+                full_name=p.full_name,
+                email=p.email,
+                target_role=p.target_role,
+                created_at=p.created_at,
+                readiness_score=gap.gap_data.get("readiness_score") if gap and gap.gap_data else None,
+                has_gap=gap is not None,
+                has_interview=p.id in interview_profiles,
+                has_practice=p.id in practice_profiles,
+                has_roadmap=p.id in roadmap_profiles,
+                verification_status=(p.profile_meta or {}).get("admin_verification", {}).get("status"),
+            )
+        )
+    return out
+
+
+class AdminUserDossier(BaseModel):
+    profile: dict
+    gap: dict | None
+    interviews: list[dict]
+    practices: list[dict]
+    roadmap: dict | None
+    roadmap_pct: float
+    job_matches: list[dict]
+    category_scores: dict[str, float]
+    verification: dict
+
+
+def _profile_to_dict(p: StudentProfile) -> dict:
+    return {
+        "id": str(p.id),
+        "full_name": p.full_name,
+        "email": p.email,
+        "phone": p.phone,
+        "summary": p.summary,
+        "target_role": p.target_role,
+        "location": p.location,
+        "years_of_experience": p.years_of_experience,
+        "skills": p.skills,
+        "skills_source": p.skills_source,
+        "education": p.education,
+        "experience": p.experience,
+        "time_per_week": p.time_per_week,
+        "budget": p.budget,
+        "created_at": p.created_at.isoformat(),
+    }
+
+
+@router.get("/users/{profile_id}", response_model=AdminUserDossier, dependencies=[Depends(require_admin)])
+async def admin_user_dossier(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> AdminUserDossier:
+    profile = await db.get(StudentProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    gap_row = (
+        await db.execute(
+            select(SkillGapSnapshot)
+            .where(SkillGapSnapshot.profile_id == profile_id)
+            .order_by(SkillGapSnapshot.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    interviews = (
+        await db.execute(
+            select(InterviewSession)
+            .options(selectinload(InterviewSession.turns))
+            .where(InterviewSession.profile_id == profile_id)
+            .order_by(InterviewSession.started_at.desc())
+            .limit(10)
+        )
+    ).scalars().all()
+
+    practices = (
+        await db.execute(
+            select(PracticeSession)
+            .where(PracticeSession.profile_id == profile_id)
+            .order_by(PracticeSession.started_at.desc())
+            .limit(10)
+        )
+    ).scalars().all()
+
+    roadmap = (
+        await db.execute(
+            select(Roadmap)
+            .where(Roadmap.profile_id == profile_id, Roadmap.status == "active")
+            .order_by(Roadmap.created_at.desc())
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+    job_matches: list[dict] = []
+    try:
+        ctx = await load_gap_context(db, profile_id)
+        if ctx is not None:
+            job_matches = rank_jobs_for_student(ctx, n=5)
+    except Exception:
+        job_matches = []
+
+    completed_interviews = [s for s in interviews if s.status == "completed" and s.overall_score is not None]
+    completed_practices = [s for s in practices if s.status == "completed" and s.overall_score is not None]
+    interview_avg = (
+        round(sum(s.overall_score for s in completed_interviews) / len(completed_interviews), 1)
+        if completed_interviews
+        else 0
+    )
+    practice_avg = (
+        round(sum(s.overall_score for s in completed_practices) / len(completed_practices), 1)
+        if completed_practices
+        else 0
+    )
+    readiness = gap_row.gap_data.get("readiness_score") if gap_row and gap_row.gap_data else None
+    roadmap_pct = compute_roadmap_progress_pct(roadmap)
+
+    return AdminUserDossier(
+        profile=_profile_to_dict(profile),
+        gap={
+            "id": str(gap_row.id),
+            "target_role": gap_row.target_role,
+            "jobs_analyzed": gap_row.jobs_analyzed,
+            "match_ratio": gap_row.match_ratio,
+            "gap_data": gap_row.gap_data,
+            "narrative_summary": gap_row.narrative_summary,
+            "created_at": gap_row.created_at.isoformat(),
+        }
+        if gap_row
+        else None,
+        interviews=[
+            {
+                "id": str(s.id),
+                "status": s.status,
+                "overall_score": s.overall_score,
+                "summary": s.summary,
+                "strengths": s.strengths,
+                "weaknesses": s.weaknesses,
+                "started_at": s.started_at.isoformat(),
+                "turn_count": len(s.turns),
+            }
+            for s in interviews
+        ],
+        practices=[
+            {
+                "id": str(s.id),
+                "status": s.status,
+                "skills_selected": s.skills_selected,
+                "overall_score": s.overall_score,
+                "verified_strong_skills": s.verified_strong_skills,
+                "verified_weak_skills": s.verified_weak_skills,
+                "started_at": s.started_at.isoformat(),
+            }
+            for s in practices
+        ],
+        roadmap={
+            "id": str(roadmap.id),
+            "total_weeks": roadmap.total_weeks,
+            "status": roadmap.status,
+            "created_at": roadmap.created_at.isoformat(),
+        }
+        if roadmap
+        else None,
+        roadmap_pct=roadmap_pct,
+        job_matches=job_matches,
+        category_scores={
+            "interview": interview_avg,
+            "practice": practice_avg,
+            "skill_gap": round(readiness, 1) if readiness is not None else 0,
+            "roadmap": roadmap_pct,
+        },
+        verification=(profile.profile_meta or {}).get(
+            "admin_verification", {"status": "unreviewed", "notes": ""}
+        ),
+    )
+
+
+class VerificationUpdate(BaseModel):
+    status: Literal["verified", "needs_review", "flagged", "unreviewed"]
+    notes: str = ""
+
+
+@router.patch("/users/{profile_id}/verification", dependencies=[Depends(require_admin)])
+async def update_verification(
+    profile_id: uuid.UUID, payload: VerificationUpdate, db: AsyncSession = Depends(get_db)
+) -> dict:
+    profile = await db.get(StudentProfile, profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    meta = dict(profile.profile_meta or {})
+    meta["admin_verification"] = {
+        "status": payload.status,
+        "notes": payload.notes,
+        "updated_at": datetime.now(timezone.utc).isoformat(),
+    }
+    profile.profile_meta = meta
+    await db.commit()
+    return meta["admin_verification"]

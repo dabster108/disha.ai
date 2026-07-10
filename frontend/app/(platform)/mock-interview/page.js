@@ -35,7 +35,8 @@ export default function MockInterviewPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [starting, setStarting] = useState(false);
-  const [durationMinutes, setDurationMinutes] = useState(15);
+  // TEMP: default 1 min for testing — restore 15 later.
+  const [durationMinutes, setDurationMinutes] = useState(1);
   const [difficulty, setDifficulty] = useState("auto");
 
   const inferredTrack = inferInterviewTrack(profile || {});
