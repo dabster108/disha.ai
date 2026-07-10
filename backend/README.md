@@ -40,15 +40,18 @@ No LinkedIn scraping (ToS).
 
 ## Setup (one-time)
 
+See **[../SETUP.md](../SETUP.md)** for the full onboarding guide (prerequisites, scrape, common issues).
+
 ```bash
 cd backend
+cp .env.example .env   # fill GROQ_API_KEY + DATABASE_URL at minimum
 uv sync
 uv run playwright install chromium
 uv run alembic upgrade head
 uv run python test_groq.py
 ```
 
-Copy `.env.example` → `.env` and fill in:
+Required in `.env`:
 
 - `GROQ_API_KEY` — LLM (skills, roadmaps, skill-gap narrative)
 - `DATABASE_URL` — Neon Postgres

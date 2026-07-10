@@ -5,8 +5,18 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import Icon from "@/components/ui/Icon";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import EducationEditor from "@/components/onboarding/EducationEditor";
+import ExperienceEditor from "@/components/onboarding/ExperienceEditor";
+import RoleSelect from "@/components/onboarding/RoleSelect";
+import SkillMultiSelect from "@/components/onboarding/SkillMultiSelect";
 import { useProfile } from "@/context/ProfileContext";
 import { createProfile, uploadResume } from "@/lib/api";
+import { matchCareerRole } from "@/lib/careerRoles";
+import {
+  DEMO_PROFILE,
+  EMPTY_EDUCATION,
+  EMPTY_EXPERIENCE,
+} from "@/lib/demoProfile";
 
 const BUDGET_OPTIONS = [
   { value: "free", label: "Free resources only" },
@@ -14,62 +24,80 @@ const BUDGET_OPTIONS = [
   { value: "flexible", label: "Flexible / paid courses OK" },
 ];
 
-function SkillChips({ skills, onChange }) {
-  const [draft, setDraft] = useState("");
+const INITIAL_FORM = {
+  full_name: "",
+  email: "",
+  phone: "",
+  summary: "",
+  skills: [],
+  parsedSkills: [],
+  education: [{ ...EMPTY_EDUCATION }],
+  experience: [],
+  target_role: "",
+  suggested_target_role: "",
+  location: "",
+  years_of_experience: "",
+  time_per_week: "",
+  budget: "free",
+};
 
-  const addSkill = () => {
-    const value = draft.trim();
-    if (!value) return;
-    if (!skills.some((s) => s.toLowerCase() === value.toLowerCase())) {
-      onChange([...skills, value]);
-    }
-    setDraft("");
+function applyParsedToForm(parsed) {
+  const education =
+    parsed.education?.length > 0
+      ? parsed.education.map((e) => ({
+          degree: e.degree || "",
+          institution: e.institution || "",
+          year: e.year || "",
+        }))
+      : [{ ...EMPTY_EDUCATION }];
+
+  const experience =
+    parsed.experience?.length > 0
+      ? parsed.experience.map((e) => ({
+          title: e.title || "",
+          company: e.company || "",
+          start_date: e.start_date || "",
+          end_date: e.end_date || "",
+          description: e.description || "",
+        }))
+      : [];
+
+  return {
+    full_name: parsed.full_name || "",
+    email: parsed.email || "",
+    phone: parsed.phone || "",
+    summary: parsed.summary || "",
+    skills: parsed.skills || [],
+    parsedSkills: parsed.skills || [],
+    education,
+    experience,
+    target_role: matchCareerRole(parsed.suggested_target_role),
+    suggested_target_role: parsed.suggested_target_role || "",
+    years_of_experience:
+      parsed.years_of_experience != null ? String(parsed.years_of_experience) : "",
   };
+}
 
-  return (
-    <div>
-      <div className="mb-3 flex flex-wrap gap-2">
-        {skills.map((skill) => (
-          <span
-            key={skill}
-            className="flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-label-md text-primary"
-          >
-            {skill}
-            <button
-              type="button"
-              onClick={() => onChange(skills.filter((s) => s !== skill))}
-              className="text-primary/60 hover:text-primary"
-              aria-label={`Remove ${skill}`}
-            >
-              <Icon name="close" size={14} />
-            </button>
-          </span>
-        ))}
-      </div>
-      <div className="flex gap-2">
-        <input
-          type="text"
-          value={draft}
-          onChange={(e) => setDraft(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" || e.key === ",") {
-              e.preventDefault();
-              addSkill();
-            }
-          }}
-          placeholder="Type a skill and press Enter (e.g. Python)"
-          className="flex-1 rounded-xl border border-outline-variant bg-white px-4 py-3 text-body-md focus:border-primary focus:outline-none"
-        />
-        <button
-          type="button"
-          onClick={addSkill}
-          className="rounded-xl border border-outline-variant px-4 py-3 text-label-md font-bold text-on-surface hover:bg-surface-container-low"
-        >
-          Add
-        </button>
-      </div>
-    </div>
-  );
+function cleanEducation(entries) {
+  return entries
+    .filter((e) => e.degree?.trim())
+    .map((e) => ({
+      degree: e.degree.trim(),
+      institution: e.institution?.trim() || null,
+      year: e.year?.trim() || null,
+    }));
+}
+
+function cleanExperience(entries) {
+  return entries
+    .filter((e) => e.title?.trim())
+    .map((e) => ({
+      title: e.title.trim(),
+      company: e.company?.trim() || null,
+      start_date: e.start_date?.trim() || null,
+      end_date: e.end_date?.trim() || null,
+      description: e.description?.trim() || null,
+    }));
 }
 
 export default function OnboardingPage() {
@@ -80,36 +108,54 @@ export default function OnboardingPage() {
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
+  const [warnings, setWarnings] = useState([]);
   const [skillsSource, setSkillsSource] = useState("manual");
+  const [extractionMethod, setExtractionMethod] = useState(null);
 
-  const [form, setForm] = useState({
-    full_name: "",
-    email: "",
-    skills: [],
-    target_role: "",
-    location: "",
-    years_of_experience: "",
-    time_per_week: "",
-    budget: "free",
-  });
+  const [form, setForm] = useState(INITIAL_FORM);
 
   const updateForm = (patch) => setForm((prev) => ({ ...prev, ...patch }));
+
+  const loadDemo = () => {
+    setError(null);
+    setWarnings(["Demo profile loaded — review fields, then continue to dashboard."]);
+    setSkillsSource("manual");
+    setExtractionMethod("demo");
+    updateForm({
+      full_name: DEMO_PROFILE.full_name,
+      email: DEMO_PROFILE.email,
+      phone: DEMO_PROFILE.phone,
+      summary: DEMO_PROFILE.summary,
+      skills: [...DEMO_PROFILE.skills],
+      parsedSkills: [...DEMO_PROFILE.skills],
+      education: DEMO_PROFILE.education.map((e) => ({ ...e })),
+      experience: DEMO_PROFILE.experience.map((e) => ({ ...e })),
+      target_role: DEMO_PROFILE.target_role,
+      suggested_target_role: DEMO_PROFILE.suggested_target_role,
+      location: DEMO_PROFILE.location,
+      years_of_experience: String(DEMO_PROFILE.years_of_experience),
+      time_per_week: String(DEMO_PROFILE.time_per_week),
+      budget: DEMO_PROFILE.budget,
+    });
+    setStep(2);
+  };
 
   const handleUpload = async (file) => {
     setUploading(true);
     setError(null);
+    setWarnings([]);
     try {
       const parsed = await uploadResume(file);
-      updateForm({
-        full_name: parsed.full_name || "",
-        skills: parsed.skills || [],
-        target_role: parsed.suggested_target_role || "",
-        years_of_experience: parsed.years_of_experience ?? "",
-      });
+      updateForm(applyParsedToForm(parsed));
       setSkillsSource("cv");
+      setExtractionMethod(parsed.extraction);
+      setWarnings(parsed.parse_warnings || []);
       setStep(2);
     } catch (err) {
       setError(err);
+      setWarnings([
+        "We couldn't parse your CV. Continue manually — your details won't be lost.",
+      ]);
     } finally {
       setUploading(false);
     }
@@ -131,15 +177,20 @@ export default function OnboardingPage() {
     setSubmitting(true);
     try {
       const payload = {
-        full_name: form.full_name || null,
-        email: form.email || null,
+        full_name: form.full_name.trim() || null,
+        email: form.email.trim() || null,
+        phone: form.phone.trim() || null,
+        summary: form.summary.trim() || null,
         skills: form.skills,
         skills_source: skillsSource,
         target_role: form.target_role.trim(),
-        location: form.location || null,
-        years_of_experience: form.years_of_experience === "" ? null : Number(form.years_of_experience),
+        location: form.location.trim() || null,
+        years_of_experience:
+          form.years_of_experience === "" ? null : Number(form.years_of_experience),
         time_per_week: form.time_per_week === "" ? null : Number(form.time_per_week),
         budget: form.budget || null,
+        education: cleanEducation(form.education),
+        experience: cleanExperience(form.experience),
       };
       const created = await createProfile(payload);
       setProfile(created);
@@ -152,39 +203,78 @@ export default function OnboardingPage() {
   };
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center px-6 py-16">
-      <div className="mb-10 text-center">
+    <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center px-5 py-12">
+      <div className="mb-8 text-center">
         <Link href="/">
-          <h1 className="text-headline-lg font-bold text-primary">DISHA AI</h1>
+          <h1 className="text-lg font-bold text-primary">DISHA AI</h1>
         </Link>
-        <p className="mt-2 text-body-md text-secondary">
-          Let&apos;s set up your profile so we can find your skill gap.
+        <p className="mt-1 text-body-md text-secondary">
+          Set up your profile so we can map your skill gap and career path.
         </p>
       </div>
 
-      <div className="mb-8 flex items-center justify-center gap-2">
+      <div className="mb-6 flex items-center justify-center gap-2">
         {[1, 2].map((s) => (
           <div
             key={s}
-            className={`h-1.5 w-16 rounded-full ${step >= s ? "bg-primary" : "bg-surface-container-high"}`}
+            className={`h-1 w-14 rounded-full ${step >= s ? "bg-primary" : "bg-surface-container-high"}`}
           />
         ))}
       </div>
 
-      {error && (
-        <div className="mb-6">
+      {error && step === 1 && (
+        <div className="mb-4">
+          <ErrorBanner message={error.message} onRetry={() => setError(null)} />
+          <button
+            type="button"
+            onClick={() => {
+              setError(null);
+              setSkillsSource("manual");
+              setStep(2);
+            }}
+            className="mt-3 w-full rounded-xl border border-outline-variant py-2.5 text-label-md font-semibold hover:bg-surface-container-low"
+          >
+            Continue with manual entry
+          </button>
+        </div>
+      )}
+
+      {error && step === 2 && (
+        <div className="mb-4">
           <ErrorBanner message={error.message} onRetry={() => setError(null)} />
         </div>
       )}
 
-      {step === 1 && (
-        <div className="rounded-2xl border border-outline-variant bg-white p-10 text-center ambient-shadow">
-          <div className="mx-auto mb-6 flex h-16 w-16 items-center justify-center rounded-full bg-primary/10 text-primary">
-            <Icon name="upload_file" size={32} />
+      {warnings.length > 0 && step === 2 && (
+        <div className="mb-4 rounded-xl border border-tertiary-fixed bg-[#fff6f4] p-4">
+          <div className="mb-2 flex items-center gap-2 text-tertiary">
+            <Icon name="info" size={18} />
+            <span className="text-label-md font-semibold">Review suggested</span>
           </div>
-          <h2 className="mb-2 text-headline-md text-on-surface">Upload your CV</h2>
-          <p className="mb-8 text-body-md text-secondary">
-            We&apos;ll extract your skills and experience automatically. PDF or DOCX.
+          <ul className="list-inside list-disc space-y-1 text-body-md text-secondary">
+            {warnings.map((w) => (
+              <li key={w}>{w}</li>
+            ))}
+          </ul>
+          {extractionMethod && extractionMethod !== "demo" && (
+            <p className="mt-2 text-label-sm text-secondary">
+              Text extracted via: {extractionMethod}
+            </p>
+          )}
+        </div>
+      )}
+
+      {step === 1 && (
+        <div className="rounded-2xl border border-outline-variant bg-white p-8 text-center ambient-shadow">
+          <div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+            <Icon name="upload_file" size={28} />
+          </div>
+          <h2 className="mb-2 text-headline-md font-semibold text-on-surface">
+            Upload your CV
+          </h2>
+          <p className="mb-6 text-body-md text-secondary">
+            We&apos;ll extract your name, contact info, skills, education, and experience.
+            PDF or DOCX.
           </p>
 
           <label className="mb-4 block cursor-pointer rounded-xl border-2 border-dashed border-outline-variant p-8 text-secondary transition-colors hover:border-primary hover:text-primary">
@@ -208,92 +298,136 @@ export default function OnboardingPage() {
             )}
           </label>
 
-          <button
-            type="button"
-            onClick={() => {
-              setSkillsSource("manual");
-              setStep(2);
-            }}
-            className="text-label-md text-secondary hover:text-primary hover:underline"
-          >
-            Skip and enter details manually
-          </button>
+          <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
+            <button
+              type="button"
+              onClick={loadDemo}
+              className="flex items-center gap-2 rounded-xl border border-primary bg-primary/5 px-5 py-2.5 text-label-md font-semibold text-primary hover:bg-primary/10"
+            >
+              <Icon name="science" size={18} />
+              Try Demo
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setSkillsSource("manual");
+                setWarnings([]);
+                setStep(2);
+              }}
+              className="text-label-md text-secondary hover:text-primary hover:underline"
+            >
+              Skip and enter manually
+            </button>
+          </div>
         </div>
       )}
 
       {step === 2 && (
         <form
           onSubmit={handleSubmit}
-          className="space-y-6 rounded-2xl border border-outline-variant bg-white p-10 ambient-shadow"
+          className="space-y-5 rounded-2xl border border-outline-variant bg-white p-8 ambient-shadow"
         >
-          <h2 className="text-headline-md text-on-surface">Confirm your profile</h2>
+          <h2 className="text-headline-md font-semibold text-on-surface">
+            Confirm your profile
+          </h2>
 
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
-              <label className="mb-1.5 block text-label-md font-bold text-on-surface">Full name</label>
+              <label className="mb-1 block text-label-md font-semibold">Full name</label>
               <input
                 type="text"
                 value={form.full_name}
                 onChange={(e) => updateForm({ full_name: e.target.value })}
-                className="w-full rounded-xl border border-outline-variant px-4 py-3 text-body-md focus:border-primary focus:outline-none"
+                className="w-full rounded-xl border border-outline-variant px-4 py-2.5 text-body-md focus:border-primary focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-label-md font-bold text-on-surface">Email</label>
+              <label className="mb-1 block text-label-md font-semibold">Email</label>
               <input
                 type="email"
                 value={form.email}
                 onChange={(e) => updateForm({ email: e.target.value })}
-                className="w-full rounded-xl border border-outline-variant px-4 py-3 text-body-md focus:border-primary focus:outline-none"
+                className="w-full rounded-xl border border-outline-variant px-4 py-2.5 text-body-md focus:border-primary focus:outline-none"
               />
             </div>
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-label-md font-bold text-on-surface">
-              Target role <span className="text-error">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={form.target_role}
-              onChange={(e) => updateForm({ target_role: e.target.value })}
-              placeholder="e.g. Backend Developer"
-              className="w-full rounded-xl border border-outline-variant px-4 py-3 text-body-md focus:border-primary focus:outline-none"
-            />
-          </div>
-
-          <div>
-            <label className="mb-1.5 block text-label-md font-bold text-on-surface">
-              Skills <span className="text-error">*</span>
-            </label>
-            <SkillChips skills={form.skills} onChange={(skills) => updateForm({ skills })} />
-          </div>
-
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div>
-              <label className="mb-1.5 block text-label-md font-bold text-on-surface">Location</label>
+              <label className="mb-1 block text-label-md font-semibold">Phone</label>
               <input
-                type="text"
-                value={form.location}
-                onChange={(e) => updateForm({ location: e.target.value })}
-                placeholder="Kathmandu"
-                className="w-full rounded-xl border border-outline-variant px-4 py-3 text-body-md focus:border-primary focus:outline-none"
+                type="tel"
+                value={form.phone}
+                onChange={(e) => updateForm({ phone: e.target.value })}
+                placeholder="+977 98XXXXXXXX"
+                className="w-full rounded-xl border border-outline-variant px-4 py-2.5 text-body-md focus:border-primary focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-label-md font-bold text-on-surface">Years of experience</label>
+              <label className="mb-1 block text-label-md font-semibold">
+                Years of experience
+              </label>
               <input
                 type="number"
                 min="0"
                 step="0.5"
                 value={form.years_of_experience}
                 onChange={(e) => updateForm({ years_of_experience: e.target.value })}
-                className="w-full rounded-xl border border-outline-variant px-4 py-3 text-body-md focus:border-primary focus:outline-none"
+                className="w-full rounded-xl border border-outline-variant px-4 py-2.5 text-body-md focus:border-primary focus:outline-none"
+              />
+            </div>
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-label-md font-semibold">
+              Target role <span className="text-error">*</span>
+            </label>
+            <RoleSelect
+              value={form.target_role}
+              suggested={form.suggested_target_role}
+              onChange={(role) => updateForm({ target_role: role })}
+            />
+          </div>
+
+          <div>
+            <label className="mb-1.5 block text-label-md font-semibold">
+              Skills <span className="text-error">*</span>
+            </label>
+            <SkillMultiSelect
+              skills={form.skills}
+              parsedSkills={form.parsedSkills}
+              onChange={(skills) => updateForm({ skills })}
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-label-md font-semibold">Education</label>
+            <EducationEditor
+              entries={form.education}
+              onChange={(education) => updateForm({ education })}
+            />
+          </div>
+
+          <div>
+            <label className="mb-2 block text-label-md font-semibold">
+              Work experience
+            </label>
+            <ExperienceEditor
+              entries={form.experience}
+              onChange={(experience) => updateForm({ experience })}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div>
+              <label className="mb-1 block text-label-md font-semibold">Location</label>
+              <input
+                type="text"
+                value={form.location}
+                onChange={(e) => updateForm({ location: e.target.value })}
+                placeholder="Kathmandu"
+                className="w-full rounded-xl border border-outline-variant px-4 py-2.5 text-body-md focus:border-primary focus:outline-none"
               />
             </div>
             <div>
-              <label className="mb-1.5 block text-label-md font-bold text-on-surface">Hours / week</label>
+              <label className="mb-1 block text-label-md font-semibold">Hours / week</label>
               <input
                 type="number"
                 min="1"
@@ -301,22 +435,22 @@ export default function OnboardingPage() {
                 value={form.time_per_week}
                 onChange={(e) => updateForm({ time_per_week: e.target.value })}
                 placeholder="10"
-                className="w-full rounded-xl border border-outline-variant px-4 py-3 text-body-md focus:border-primary focus:outline-none"
+                className="w-full rounded-xl border border-outline-variant px-4 py-2.5 text-body-md focus:border-primary focus:outline-none"
               />
             </div>
           </div>
 
           <div>
-            <label className="mb-1.5 block text-label-md font-bold text-on-surface">Budget</label>
+            <label className="mb-2 block text-label-md font-semibold">Budget</label>
             <div className="flex flex-wrap gap-2">
               {BUDGET_OPTIONS.map((opt) => (
                 <button
                   key={opt.value}
                   type="button"
                   onClick={() => updateForm({ budget: opt.value })}
-                  className={`rounded-xl border px-4 py-2.5 text-label-md ${
+                  className={`rounded-xl border px-4 py-2 text-label-md ${
                     form.budget === opt.value
-                      ? "border-primary bg-primary/10 font-bold text-primary"
+                      ? "border-primary bg-primary/10 font-semibold text-primary"
                       : "border-outline-variant text-secondary hover:bg-surface-container-low"
                   }`}
                 >
@@ -330,14 +464,14 @@ export default function OnboardingPage() {
             <button
               type="button"
               onClick={() => setStep(1)}
-              className="rounded-xl border border-outline-variant px-6 py-3.5 text-label-md font-bold text-on-surface hover:bg-surface-container-low"
+              className="rounded-xl border border-outline-variant px-5 py-3 text-label-md font-semibold hover:bg-surface-container-low"
             >
               Back
             </button>
             <button
               type="submit"
               disabled={submitting}
-              className="flex-1 rounded-xl bg-primary py-3.5 text-label-md font-bold text-on-primary transition-all hover:bg-primary-container disabled:opacity-60"
+              className="flex-1 rounded-xl bg-primary py-3 text-label-md font-semibold text-on-primary hover:bg-primary-container disabled:opacity-60"
             >
               {submitting ? "Saving..." : "Continue to dashboard"}
             </button>

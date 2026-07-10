@@ -72,11 +72,8 @@ def skills_match(a: str, b: str) -> bool:
 # --------------------------------------------------------------------------
 
 
-def _market_demand(
-    student_skills: list[str], target_role: str, n_jobs: int
-) -> tuple[list[dict], dict[str, dict], set[str]]:
-    """One Chroma query, reused by both compute_market_gap and the combined agent."""
-    jobs = search_jobs(target_role, n=n_jobs)
+def _demand_from_jobs(jobs: list[dict]) -> dict[str, dict]:
+    """Aggregate required-skill demand across a list of job postings."""
     demand: dict[str, dict] = {}
     for job in jobs:
         for skill in job["required_skills"]:
@@ -85,6 +82,15 @@ def _market_demand(
                 continue
             entry = demand.setdefault(key, {"skill": skill.strip(), "jobs_requiring": 0})
             entry["jobs_requiring"] += 1
+    return demand
+
+
+def _market_demand(
+    student_skills: list[str], target_role: str, n_jobs: int
+) -> tuple[list[dict], dict[str, dict], set[str]]:
+    """One Chroma query, reused by both compute_market_gap and the combined agent."""
+    jobs = search_jobs(target_role, n=n_jobs)
+    demand = _demand_from_jobs(jobs)
     student_keys = {normalize_skill_name(s) for s in student_skills}
     return jobs, demand, student_keys
 
@@ -266,6 +272,20 @@ async def load_gap_context(
 #   clamped to [0, 100]
 
 
+def _confidence(*, market_backed: bool, verified: bool) -> str:
+    """Trust level for a skill claim.
+
+    high   = employers want it AND we tested it (interview/practice proof)
+    medium = market-backed only, or test-proven only
+    low    = self-claimed on CV, no market or test evidence yet
+    """
+    if market_backed and verified:
+        return "high"
+    if market_backed or verified:
+        return "medium"
+    return "low"
+
+
 def _priority_score(
     *, jobs_requiring: int, is_weak: bool, is_market_missing: bool, is_overclaimed: bool, is_strong: bool, is_matched: bool
 ) -> int:
@@ -304,10 +324,22 @@ def _priority_reason(*, jobs_requiring: int, is_weak: bool, is_market_missing: b
 
 def compute_combined_skill_gap(ctx: GapContext) -> dict:
     profile = ctx.profile
+    settings = get_settings()
     claimed_skills = [s.strip() for s in (profile.skills or []) if s and s.strip()]
     claimed_keys = {normalize_skill_name(s) for s in claimed_skills}
 
-    jobs, demand, _ = _market_demand(claimed_skills, profile.target_role, ctx.n_jobs)
+    # ONE Chroma search per report. The pool (lower retrieval threshold, larger
+    # n) is reused for both market-demand aggregation and the ranked job matches
+    # below — instead of the two separate searches this module used to run.
+    pool_n = max(ctx.n_jobs, settings.job_match_max_results * settings.job_search_overfetch, 32)
+    job_pool = search_jobs(
+        profile.target_role,
+        n=pool_n,
+        min_similarity=settings.job_match_retrieval_min_similarity,
+    )
+    demand_jobs = [j for j in job_pool if j["similarity"] >= settings.min_job_similarity][: ctx.n_jobs]
+    jobs = demand_jobs
+    demand = _demand_from_jobs(demand_jobs)
 
     interview_signals = merge_interview_signals(ctx.interview)
     practice_signals = merge_practice_signals(ctx.practice)
@@ -362,8 +394,19 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
         is_matched = jobs_requiring > 0 and is_claimed
         is_overclaimed = is_claimed and is_weak
 
+        verified = is_strong or is_weak
+
         if is_matched:
-            matched_skills.append({"skill": skill_name, "jobs_requiring": jobs_requiring, "status": "matched"})
+            matched_skills.append(
+                {
+                    "skill": skill_name,
+                    "jobs_requiring": jobs_requiring,
+                    "status": "matched",
+                    "market_backed": True,
+                    "verified": verified,
+                    "confidence": _confidence(market_backed=True, verified=verified),
+                }
+            )
 
         priority = _priority_score(
             jobs_requiring=jobs_requiring,
@@ -375,7 +418,15 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
         )
 
         if is_market_missing:
-            market_missing_skills.append({"skill": skill_name, "jobs_requiring": jobs_requiring, "priority_score": priority})
+            market_missing_skills.append(
+                {
+                    "skill": skill_name,
+                    "jobs_requiring": jobs_requiring,
+                    "priority_score": priority,
+                    "market_backed": True,
+                    "confidence": _confidence(market_backed=True, verified=False),
+                }
+            )
 
         if is_strong:
             entry = strong_by_skill[key]
@@ -404,6 +455,10 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
                 {
                     "skill": skill_name,
                     "priority_score": priority,
+                    "jobs_requiring": jobs_requiring,
+                    "market_backed": jobs_requiring > 0,
+                    "verified": verified,
+                    "confidence": _confidence(market_backed=jobs_requiring > 0, verified=verified),
                     "reason": _priority_reason(
                         jobs_requiring=jobs_requiring,
                         is_weak=is_weak,
@@ -447,13 +502,76 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
     priority_skill_names = [row["skill"] for row in priority_learn[:5]]
     from app.services.job_matching import rank_jobs_for_student
 
-    ranked_jobs = rank_jobs_for_student(ctx)
+    # Reuse the pool retrieved above — no second Chroma search.
+    ranked_jobs = rank_jobs_for_student(ctx, prefetched=job_pool)
+
+    has_interview = ctx.interview is not None
+    has_practice = ctx.practice is not None
+    verified_count = len(verified_strong_skills) + len(verified_weak_skills)
+    proof_signals = sum([has_interview, has_practice])
+    if proof_signals >= 2 and verified_count > 0:
+        accuracy_level = "High"
+    elif proof_signals >= 1 and verified_count > 0:
+        accuracy_level = "Medium"
+    else:
+        accuracy_level = "Low"
+
+    evidence = {
+        "accuracy_level": accuracy_level,
+        "signals": {
+            "cv_claimed": {
+                "present": len(claimed_skills) > 0,
+                "count": len(claimed_skills),
+                "label": "CV / claimed skills",
+            },
+            "market": {
+                "present": len(jobs) > 0,
+                "jobs_analyzed": len(jobs),
+                "skills_in_demand": len(demand),
+                "label": "Live Nepal job postings (Chroma)",
+            },
+            "interview": {
+                "present": has_interview,
+                "overall_score": interview_signals["overall_score"],
+                "verified_skills": len(interview_signals["strong_skills"]) + len(interview_signals["weak_skills"]),
+                "label": "Mock interview proof",
+            },
+            "practice": {
+                "present": has_practice,
+                "pass_rate": practice_signals["pass_rate"],
+                "verified_skills": len(practice_signals["strong_skills"]) + len(practice_signals["weak_skills"]),
+                "label": "Skill practice proof",
+            },
+        },
+        "confidence_legend": {
+            "high": "Employers want it AND you proved it in a test",
+            "medium": "Market-backed only, or test-proven only",
+            "low": "Self-claimed on CV, not yet verified",
+        },
+        "checklist": [
+            {
+                "key": "interview",
+                "label": "Complete a mock interview",
+                "done": has_interview,
+                "href": "/mock-interview",
+                "impact": "Verifies claimed skills with adaptive Q&A",
+            },
+            {
+                "key": "practice",
+                "label": "Complete a practice session",
+                "done": has_practice,
+                "href": "/practice",
+                "impact": "Pass/fail tests each skill individually",
+            },
+        ],
+    }
 
     return {
         "target_role": profile.target_role,
         "jobs_analyzed": len(jobs),
         "match_ratio": match_ratio,
         "readiness_score": readiness_score,
+        "evidence": evidence,
         "sources_used": {
             "profile": True,
             "market": True,
@@ -478,6 +596,9 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
                 "similarity": job.get("composite_score", 0),
                 "match_score": job["match_score"],
                 "match_label": job["match_label"],
+                "matched_skills": job.get("matched_skills", []),
+                "missing_skills": job.get("missing_skills", []),
+                "relaxed_match": job.get("relaxed_match", False),
                 "explanation": job.get("explanation"),
             }
             for job in ranked_jobs

@@ -15,8 +15,22 @@ const TASK_TYPE_ICON = {
   practice: "fitness_center",
 };
 
+const RESOURCE_ICON = {
+  video: "play_circle",
+  article: "article",
+  docs: "menu_book",
+  course: "school",
+  practice: "fitness_center",
+};
+
 function isTaskDone(progress, week, taskIndex) {
   return (progress?.completed || []).some((e) => e.week === week && e.task_index === taskIndex);
+}
+
+function isResourceDone(progress, week, taskIndex, resourceIndex) {
+  return (progress?.resources_completed || []).some(
+    (e) => e.week === week && e.task_index === taskIndex && e.resource_index === resourceIndex
+  );
 }
 
 export default function RoadmapPage() {
@@ -73,27 +87,39 @@ export default function RoadmapPage() {
 
   const toggleWeek = (week) => setExpanded((prev) => ({ ...prev, [week]: !prev[week] }));
 
+  // When a week just became fully complete, collapse it and open the next one
+  // so finishing a week naturally hands the student their next step.
+  const advanceIfWeekComplete = (updated, week) => {
+    const weekObj = updated.weeks.find((w) => w.week === week);
+    if (!weekObj) return;
+    const doneInWeek = weekObj.tasks.filter((_, i) => isTaskDone(updated.progress, week, i)).length;
+    if (doneInWeek === weekObj.tasks.length && weekObj.tasks.length > 0) {
+      const nextWeek = updated.weeks.find((w) => w.week > week);
+      setExpanded((prev) => ({
+        ...prev,
+        [week]: false,
+        ...(nextWeek ? { [nextWeek.week]: true } : {}),
+      }));
+    }
+  };
+
   const toggleTask = async (week, taskIndex) => {
-    const done = isTaskDone(roadmap.progress, week, taskIndex);
-    const markingDone = !done;
+    const markingDone = !isTaskDone(roadmap.progress, week, taskIndex);
     try {
       const updated = await updateRoadmapProgress(profileId, week, taskIndex, markingDone);
       setRoadmap(updated);
+      if (markingDone) advanceIfWeekComplete(updated, week);
+    } catch (err) {
+      setError(err);
+    }
+  };
 
-      if (markingDone) {
-        const weekObj = updated.weeks.find((w) => w.week === week);
-        const doneInWeek = weekObj.tasks.filter((_, i) => isTaskDone(updated.progress, week, i)).length;
-        if (doneInWeek === weekObj.tasks.length) {
-          // Week just completed — collapse it and open whatever's next, so
-          // finishing a week naturally hands the student their next step.
-          const nextWeek = updated.weeks.find((w) => w.week > week);
-          setExpanded((prev) => ({
-            ...prev,
-            [week]: false,
-            ...(nextWeek ? { [nextWeek.week]: true } : {}),
-          }));
-        }
-      }
+  const toggleResource = async (week, taskIndex, resourceIndex) => {
+    const markingDone = !isResourceDone(roadmap.progress, week, taskIndex, resourceIndex);
+    try {
+      const updated = await updateRoadmapProgress(profileId, week, taskIndex, markingDone, resourceIndex);
+      setRoadmap(updated);
+      if (markingDone) advanceIfWeekComplete(updated, week);
     } catch (err) {
       setError(err);
     }
@@ -230,34 +256,113 @@ export default function RoadmapPage() {
                   <div className="space-y-3">
                     {week.tasks.map((task, i) => {
                       const done = isTaskDone(roadmap.progress, week.week, i);
+                      const resources = task.resources || [];
+                      const hasResources = resources.length > 0;
                       return (
                         <div
                           key={`${task.title}-${i}`}
-                          className={`flex items-start gap-4 rounded-xl border p-4 ${
+                          className={`rounded-xl border p-4 ${
                             done ? "border-green-200 bg-green-50/50" : "border-outline-variant bg-surface-bright"
                           }`}
                         >
-                          <button
-                            type="button"
-                            onClick={() => toggleTask(week.week, i)}
-                            className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-                              done ? "border-green-500 bg-green-500 text-white" : "border-outline-variant"
-                            }`}
-                          >
-                            {done && <Icon name="check" size={14} />}
-                          </button>
-                          <Icon
-                            name={TASK_TYPE_ICON[task.type] || "task_alt"}
-                            className={done ? "text-green-600" : "text-primary"}
-                          />
-                          <div className="flex-1">
-                            <p className={`text-label-md font-bold ${done ? "text-secondary line-through" : "text-on-surface"}`}>
-                              {task.title}
-                            </p>
-                            <p className="text-sm text-secondary">
-                              {task.resource} • <span className="uppercase">{task.skill}</span>
-                            </p>
+                          <div className="flex items-start gap-4">
+                            <button
+                              type="button"
+                              onClick={() => !hasResources && toggleTask(week.week, i)}
+                              disabled={hasResources}
+                              title={hasResources ? "Completes automatically when all resources are done" : "Mark task complete"}
+                              className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                                done ? "border-green-500 bg-green-500 text-white" : "border-outline-variant"
+                              } ${hasResources ? "cursor-default" : ""}`}
+                            >
+                              {done && <Icon name="check" size={14} />}
+                            </button>
+                            <Icon
+                              name={TASK_TYPE_ICON[task.type] || "task_alt"}
+                              className={done ? "text-green-600" : "text-primary"}
+                            />
+                            <div className="flex-1">
+                              <p className={`text-label-md font-bold ${done ? "text-secondary line-through" : "text-on-surface"}`}>
+                                {task.title}
+                              </p>
+                              <p className="text-sm text-secondary">
+                                <span className="uppercase">{task.skill}</span>
+                                {hasResources && (
+                                  <>
+                                    {" • "}
+                                    {resources.filter((_, ri) => isResourceDone(roadmap.progress, week.week, i, ri)).length}
+                                    /{resources.length} resources done
+                                  </>
+                                )}
+                              </p>
+                            </div>
                           </div>
+
+                          {hasResources && (
+                            <div className="mt-4 space-y-2 pl-10">
+                              {resources.map((res, ri) => {
+                                const resDone = isResourceDone(roadmap.progress, week.week, i, ri);
+                                return (
+                                  <div
+                                    key={`${res.url}-${ri}`}
+                                    className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${
+                                      resDone ? "border-green-200 bg-green-50/40" : "border-outline-variant bg-white"
+                                    }`}
+                                  >
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleResource(week.week, i, ri)}
+                                      title={resDone ? "Mark as not done" : "Mark as completed"}
+                                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
+                                        resDone ? "border-green-500 bg-green-500 text-white" : "border-outline-variant"
+                                      }`}
+                                    >
+                                      {resDone && <Icon name="check" size={12} />}
+                                    </button>
+                                    <Icon
+                                      name={RESOURCE_ICON[res.type] || "link"}
+                                      size={18}
+                                      className={resDone ? "text-green-600" : "text-primary"}
+                                    />
+                                    <a
+                                      href={res.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="flex-1 min-w-0"
+                                    >
+                                      <p className={`truncate text-sm font-semibold ${resDone ? "text-secondary line-through" : "text-on-surface hover:text-primary"}`}>
+                                        {res.title}
+                                      </p>
+                                      <p className="truncate text-xs text-secondary">
+                                        {res.provider}
+                                        {res.duration ? ` • ${res.duration}` : ""}
+                                        {" • "}
+                                        <span className="uppercase">{res.type}</span>
+                                      </p>
+                                    </a>
+                                    <span
+                                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                                        res.cost === "paid"
+                                          ? "bg-tertiary-fixed text-on-tertiary-fixed"
+                                          : "bg-primary/10 text-primary"
+                                      }`}
+                                    >
+                                      {res.cost}
+                                    </span>
+                                    <a
+                                      href={res.url}
+                                      target="_blank"
+                                      rel="noopener noreferrer"
+                                      className="shrink-0 text-secondary hover:text-primary"
+                                      title="Open resource"
+                                    >
+                                      <Icon name="open_in_new" size={16} />
+                                    </a>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
                         </div>
                       );
                     })}
@@ -270,15 +375,6 @@ export default function RoadmapPage() {
       </div>
 
       <div className="mt-20 flex flex-col items-center gap-4 text-center">
-        <button
-          type="button"
-          onClick={() => generateFresh({ force_replan: true })}
-          disabled={generating}
-          className="group inline-flex items-center gap-3 rounded-2xl border border-outline-variant bg-white px-10 py-4 font-bold text-on-surface shadow-sm transition-all hover:shadow-md disabled:opacity-60"
-        >
-          <Icon name="auto_awesome" className="text-primary transition-transform group-hover:rotate-12" />
-          Regenerate Roadmap
-        </button>
         <Link href="/skill-gap" className="text-label-md text-secondary hover:text-primary hover:underline">
           Back to Skill Gap Analysis
         </Link>

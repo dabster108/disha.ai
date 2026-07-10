@@ -33,14 +33,20 @@ export default function ActiveInterviewPage() {
     textMode,
     setTextMode,
     ttsUnavailable,
+    sttUnavailable,
+    ttsProvider,
     autoContinue,
     setAutoContinue,
     sessionStartTime,
+    sessionRemainingMs,
+    questionRemainingMs,
     lastScore,
     coachTip,
     submitting,
     muted,
     setMuted,
+    dishaCaption,
+    liveUserCaption,
     recorder,
     skipSpeaking,
     toggleRecording,
@@ -53,8 +59,24 @@ export default function ActiveInterviewPage() {
   const showRecordingWarning =
     recorder.isRecording && recorder.durationMs >= recorder.warningAtMs;
 
+  const micDisabled =
+    submitting ||
+    sessionState === "transcribing" ||
+    sessionState === "evaluating" ||
+    sessionState === "disha_speaking" ||
+    sessionState === "loading" ||
+    sessionState === "session_timeout" ||
+    sessionState === "completed";
+
+  const dishaCaptionLabel =
+    sessionState === "feedback"
+      ? "DISHA — Feedback"
+      : sessionState === "disha_speaking"
+        ? "DISHA — Speaking"
+        : "DISHA";
+
   if (sessionState === "loading" && !session) {
-    return <LoadingState label="Connecting to interview..." />;
+    return <LoadingState label="Connecting to interview…" />;
   }
 
   if (error && !session) {
@@ -67,7 +89,6 @@ export default function ActiveInterviewPage() {
 
   return (
     <div className="flex min-h-[calc(100vh-4rem)] flex-col bg-surface">
-      {/* Header */}
       <header className="flex shrink-0 items-center justify-between border-b border-outline-variant/50 bg-white px-6 py-4">
         <div>
           <span className="mb-0.5 block text-label-sm uppercase tracking-widest text-primary">
@@ -87,12 +108,29 @@ export default function ActiveInterviewPage() {
       </header>
 
       <div className="flex flex-1 flex-col gap-6 p-4 lg:flex-row lg:p-6">
-        {/* Main stage */}
         <div className="flex flex-1 flex-col gap-6">
-          {ttsUnavailable && !textMode && (
+          {ttsUnavailable && (
             <div className="rounded-xl border border-tertiary/30 bg-tertiary-fixed/20 px-4 py-3 text-sm text-on-surface">
-              Voice playback unavailable — questions shown as text. You can still record answers or
-              switch to text mode.
+              Voice playback unavailable — read DISHA&apos;s captions below. You can still record or type
+              answers.
+            </div>
+          )}
+
+          {ttsProvider === "browser" && !ttsUnavailable && (
+            <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
+              Using your browser&apos;s built-in voice as a fallback.
+            </div>
+          )}
+
+          {ttsProvider === "edge" && !ttsUnavailable && (
+            <div className="rounded-xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
+              DISHA voice: default neural TTS (no Google Cloud setup required).
+            </div>
+          )}
+
+          {sttUnavailable && (
+            <div className="rounded-xl border border-tertiary/30 bg-tertiary-fixed/20 px-4 py-3 text-sm text-on-surface">
+              Speech recognition unavailable — type your answers in text mode.
             </div>
           )}
 
@@ -106,31 +144,8 @@ export default function ActiveInterviewPage() {
             recordingDurationMs={recorder.durationMs}
           />
 
-          {/* Question + transcript */}
-          {!evaluated ? (
-            textMode ? (
-              <form onSubmit={handleTextSubmit} className="space-y-4">
-                <LiveTranscript
-                  question={currentTurn?.question}
-                  questionMeta={
-                    currentTurn
-                      ? `Question ${currentTurn.turn_index} • ${currentTurn.question_type}`
-                      : null
-                  }
-                  transcript={textAnswer}
-                  editable
-                  onTranscriptChange={setTextAnswer}
-                  placeholder="Type your answer here…"
-                />
-                <button
-                  type="submit"
-                  disabled={submitting || !textAnswer.trim()}
-                  className="rounded-xl bg-primary px-10 py-4 text-label-md font-bold text-on-primary transition-all hover:bg-primary-container disabled:opacity-60"
-                >
-                  {submitting ? "Evaluating…" : "Submit Answer"}
-                </button>
-              </form>
-            ) : (
+          {textMode && !evaluated ? (
+            <form onSubmit={handleTextSubmit} className="space-y-4">
               <LiveTranscript
                 question={currentTurn?.question}
                 questionMeta={
@@ -138,34 +153,58 @@ export default function ActiveInterviewPage() {
                     ? `Question ${currentTurn.turn_index} • ${currentTurn.question_type}`
                     : null
                 }
-                transcript={transcript}
-                placeholder={
-                  sessionState === "transcribing"
-                    ? "Processing your answer…"
-                    : sessionState === "evaluating"
-                      ? "DISHA is analyzing your answer…"
-                      : "Your answer will appear here after you speak…"
-                }
+                dishaCaption={dishaCaption}
+                dishaCaptionLabel={dishaCaptionLabel}
+                transcript={textAnswer}
+                editable
+                onTranscriptChange={setTextAnswer}
+                placeholder="Type your answer here…"
               />
-            )
+              <button
+                type="submit"
+                disabled={submitting || !textAnswer.trim() || sessionState === "disha_speaking"}
+                className="rounded-xl bg-primary px-10 py-4 text-label-md font-bold text-on-primary transition-all hover:bg-primary-container disabled:opacity-60"
+              >
+                {submitting ? "Evaluating…" : "Submit Answer"}
+              </button>
+            </form>
           ) : (
             <div className="space-y-4">
               <LiveTranscript
+                question={!dishaCaption ? currentTurn?.question : undefined}
+                questionMeta={
+                  currentTurn && !dishaCaption
+                    ? `Question ${currentTurn.turn_index} • ${currentTurn.question_type}`
+                    : null
+                }
+                dishaCaption={dishaCaption || (!evaluated ? currentTurn?.question : undefined)}
+                dishaCaptionLabel={dishaCaptionLabel}
                 transcript={transcript}
-                placeholder=""
+                liveUserCaption={liveUserCaption}
+                placeholder={
+                  sessionState === "disha_speaking"
+                    ? "Wait for DISHA to finish speaking…"
+                    : sessionState === "listening"
+                      ? "Tap the mic when you're ready to answer…"
+                      : "Your answer will appear here…"
+                }
               />
-              <div className="rounded-xl border-l-4 border-primary bg-primary/5 p-6">
-                <div className="mb-3 flex items-center justify-between">
-                  <span className="text-label-sm font-bold uppercase tracking-wider text-primary">
-                    Feedback
-                  </span>
-                  <span className="text-headline-md font-bold text-primary">
-                    {evaluated.score}/10
-                  </span>
+
+              {evaluated && (
+                <div className="rounded-xl border-l-4 border-primary bg-primary/5 p-6">
+                  <div className="mb-3 flex items-center justify-between">
+                    <span className="text-label-sm font-bold uppercase tracking-wider text-primary">
+                      Latest score
+                    </span>
+                    <span className="text-headline-md font-bold text-primary">
+                      {evaluated.score}/10
+                    </span>
+                  </div>
+                  <p className="text-body-md text-on-surface-variant">{evaluated.feedback}</p>
                 </div>
-                <p className="text-body-md text-on-surface-variant">{evaluated.feedback}</p>
-              </div>
-              {!autoContinue && (
+              )}
+
+              {!autoContinue && evaluated && (
                 <button
                   type="button"
                   onClick={() => continueFromFeedback()}
@@ -177,13 +216,12 @@ export default function ActiveInterviewPage() {
             </div>
           )}
 
-          {/* Controls */}
           <div className="flex flex-wrap items-center justify-center gap-3 border-t border-outline-variant/50 pt-6">
-            {!textMode && !evaluated && (
+            {!textMode && (
               <MicButton
                 sessionState={sessionState}
                 isRecording={recorder.isRecording}
-                disabled={submitting || sessionState === "transcribing" || sessionState === "evaluating" || sessionState === "disha_speaking"}
+                disabled={micDisabled}
                 onToggle={toggleRecording}
                 onHoldStart={startHoldRecording}
                 onHoldEnd={stopHoldRecording}
@@ -223,11 +261,13 @@ export default function ActiveInterviewPage() {
           </div>
         </div>
 
-        {/* Sidebar */}
         <div className="w-full shrink-0 lg:w-72">
           <SessionSidebar
             sessionState={sessionState}
             sessionStartTime={sessionStartTime}
+            sessionRemainingMs={sessionRemainingMs}
+            questionRemainingMs={questionRemainingMs}
+            showCountdown
             lastScore={lastScore}
             coachTip={coachTip}
             currentTurnIndex={currentTurn?.turn_index}

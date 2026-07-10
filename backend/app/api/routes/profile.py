@@ -52,7 +52,8 @@ class ResumeParseResult(BaseModel):
     skills: list[str]
     skills_source: Literal["cv"] = "cv"
     suggested_target_role: str | None
-    extraction: str  # 'mistral-ocr' | 'pypdf' | 'docx'
+    extraction: str  # 'mistral-ocr' | 'pypdf' | 'docx' | combined
+    parse_warnings: list[str] = Field(default_factory=list)
     note: str = "Review these fields, then save them via POST /api/profile."
 
 
@@ -100,7 +101,7 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeParseResult:
             detail="Could not extract enough text from the resume.",
         )
 
-    parsed = await parse_cv(text)
+    parsed, warnings = await parse_cv(text)
     return ResumeParseResult(
         filename=file.filename or "resume",
         full_name=parsed.full_name,
@@ -113,4 +114,5 @@ async def upload_resume(file: UploadFile = File(...)) -> ResumeParseResult:
         skills=parsed.skills,
         suggested_target_role=parsed.suggested_target_role,
         extraction=extraction,
+        parse_warnings=warnings,
     )

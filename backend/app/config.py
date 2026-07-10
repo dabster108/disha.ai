@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     )
 
     groq_api_key: str
+    # Separate Groq key for voice STT (Whisper) — keeps STT quota distinct from CV/practice.
+    groq_api_key2: str | None = None
+    groq_whisper_model: str = "whisper-large-v3"
     database_url: str
     mistral_api_key: str | None = None
     # Separate key for the interview LLM (distinct quota from the OCR key above).
@@ -28,6 +31,8 @@ class Settings(BaseSettings):
     google_tts_voice_name: str = "en-US-Standard-C"
     google_tts_audio_encoding: str = "MP3"
     google_stt_language_code: str = "en-US"
+    # Default TTS when Google Cloud credentials are not set (Microsoft neural via edge-tts).
+    edge_tts_voice: str = "en-US-JennyNeural"
 
     groq_model: str = "llama-3.1-8b-instant"
     # OCR 3 pinned explicitly — "mistral-ocr-latest" may route to OCR 4.

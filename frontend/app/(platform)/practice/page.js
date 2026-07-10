@@ -203,8 +203,17 @@ export default function PracticePage() {
                   <p className="text-body-md font-bold text-on-surface">
                     {s.skills_selected.join(", ")}
                   </p>
-                  <p className="text-sm text-secondary">
-                    {s.track === "tech" ? "Technical" : "Scenario"} • {s.status}
+                  <p className="mt-1 flex items-center gap-2 text-sm text-secondary">
+                    {s.track === "tech" ? "Technical" : "Scenario"}
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${
+                        s.status === "completed"
+                          ? "bg-green-100 text-green-700"
+                          : "bg-tertiary-fixed text-on-tertiary-fixed"
+                      }`}
+                    >
+                      {s.status}
+                    </span>
                   </p>
                 </div>
                 <div className="text-right">

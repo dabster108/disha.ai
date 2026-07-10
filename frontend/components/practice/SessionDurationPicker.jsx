@@ -1,8 +1,6 @@
 "use client";
 
-export default function SessionDurationPicker({ value, onChange }) {
-  const options = [5, 10, 15, 20, 30];
-
+export default function SessionDurationPicker({ value, onChange, options = [5, 10, 15, 20, 30] }) {
   return (
     <div className="flex flex-wrap gap-3">
       {options.map((mins) => (

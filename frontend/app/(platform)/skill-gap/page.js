@@ -2,12 +2,161 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 import { useProfile } from "@/context/ProfileContext";
 import { createRoadmap, getLatestGap, isNotFound, runSkillGap } from "@/lib/api";
+
+const CONFIDENCE_STYLE = {
+  high: { cls: "bg-green-100 text-green-700", label: "High" },
+  medium: { cls: "bg-primary/10 text-primary", label: "Medium" },
+  low: { cls: "bg-tertiary-fixed text-on-tertiary-fixed", label: "Low" },
+};
+
+function ConfidenceBadge({ level }) {
+  const style = CONFIDENCE_STYLE[level] || CONFIDENCE_STYLE.low;
+  return (
+    <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide ${style.cls}`}>
+      {style.label}
+    </span>
+  );
+}
+
+function ValidationPanel({ evidence, onRun, running }) {
+  if (!evidence) return null;
+  const { signals = {}, accuracy_level, confidence_legend = {}, checklist = [] } = evidence;
+  const accuracyStyle =
+    accuracy_level === "High"
+      ? "bg-green-100 text-green-700"
+      : accuracy_level === "Medium"
+        ? "bg-primary/10 text-primary"
+        : "bg-tertiary-fixed text-on-tertiary-fixed";
+
+  const signalCards = [
+    {
+      key: "cv_claimed",
+      icon: "description",
+      title: "CV / Claimed Skills",
+      detail: signals.cv_claimed?.present
+        ? `${signals.cv_claimed.count} skills on your profile`
+        : "No skills on profile yet",
+      ok: signals.cv_claimed?.present,
+    },
+    {
+      key: "market",
+      icon: "work",
+      title: "Live Nepal Job Market",
+      detail: `${signals.market?.jobs_analyzed ?? 0} postings analyzed • ${signals.market?.skills_in_demand ?? 0} skills in demand`,
+      ok: signals.market?.present,
+    },
+    {
+      key: "interview",
+      icon: "record_voice_over",
+      title: "Mock Interview Proof",
+      detail: signals.interview?.present
+        ? `Score ${signals.interview.overall_score ?? "—"}/10 • ${signals.interview.verified_skills} skills tested`
+        : "Not completed — reduces accuracy",
+      ok: signals.interview?.present,
+    },
+    {
+      key: "practice",
+      icon: "sports_esports",
+      title: "Skill Practice Proof",
+      detail: signals.practice?.present
+        ? `${signals.practice.verified_skills} skills verified`
+        : "Not completed — reduces accuracy",
+      ok: signals.practice?.present,
+    },
+  ];
+
+  return (
+    <div className="mb-12 rounded-2xl border border-outline-variant bg-surface-container-lowest p-8 mask-reveal">
+      <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-center">
+        <div className="flex items-center gap-3">
+          <Icon name="verified" className="text-primary" filled />
+          <div>
+            <h3 className="text-headline-md text-on-surface">How we know this is true</h3>
+            <p className="text-body-md text-secondary">
+              Every skill verdict is backed by up to 4 evidence signals.
+            </p>
+          </div>
+        </div>
+        <span className={`inline-flex items-center gap-2 rounded-full px-4 py-2 text-label-md font-bold ${accuracyStyle}`}>
+          {accuracy_level} accuracy
+        </span>
+      </div>
+
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        {signalCards.map((s) => (
+          <div
+            key={s.key}
+            className={`rounded-xl border p-4 ${s.ok ? "border-green-200 bg-green-50/40" : "border-outline-variant bg-white"}`}
+          >
+            <div className="mb-2 flex items-center justify-between">
+              <Icon name={s.icon} className={s.ok ? "text-green-600" : "text-secondary"} />
+              <Icon
+                name={s.ok ? "check_circle" : "radio_button_unchecked"}
+                size={18}
+                className={s.ok ? "text-green-600" : "text-outline"}
+              />
+            </div>
+            <p className="text-label-md font-bold text-on-surface">{s.title}</p>
+            <p className="mt-1 text-sm text-secondary">{s.detail}</p>
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-6 flex flex-wrap gap-x-6 gap-y-2 text-xs text-secondary">
+        {Object.entries(confidence_legend).map(([level, desc]) => (
+          <span key={level} className="flex items-center gap-2">
+            <ConfidenceBadge level={level} />
+            {desc}
+          </span>
+        ))}
+      </div>
+
+      {checklist.some((c) => !c.done) && (
+        <div className="mt-6 rounded-xl border border-primary/20 bg-primary/5 p-5">
+          <p className="mb-3 flex items-center gap-2 text-label-md font-bold text-primary">
+            <Icon name="checklist" size={18} />
+            Validate my gap — raise your accuracy
+          </p>
+          <div className="space-y-2">
+            {checklist.map((c) => (
+              <div key={c.key} className="flex items-center justify-between gap-4">
+                <span className="flex items-center gap-2 text-body-md text-on-surface">
+                  <Icon
+                    name={c.done ? "check_circle" : "radio_button_unchecked"}
+                    size={18}
+                    className={c.done ? "text-green-600" : "text-secondary"}
+                  />
+                  <span className={c.done ? "text-secondary line-through" : ""}>{c.label}</span>
+                  <span className="hidden text-xs text-secondary sm:inline">— {c.impact}</span>
+                </span>
+                {!c.done && (
+                  <Link href={c.href} className="shrink-0 text-label-md font-bold text-primary hover:underline">
+                    Start
+                  </Link>
+                )}
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={onRun}
+            disabled={running}
+            className="mt-4 text-label-md font-bold text-primary hover:underline disabled:opacity-60"
+          >
+            {running ? "Re-running..." : "Re-run analysis after completing these"}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
 
 export default function SkillGapPage() {
   const { profile, profileId } = useProfile();
@@ -180,6 +329,8 @@ export default function SkillGapPage() {
         </button>
       )}
 
+      <ValidationPanel evidence={gap.evidence} onRun={handleRun} running={running} />
+
       <div className="grid grid-cols-12 items-start gap-8">
         <section className="col-span-12 space-y-6 mask-reveal lg:col-span-4">
           <h3 className="text-headline-md text-on-surface">Your Skills</h3>
@@ -195,10 +346,11 @@ export default function SkillGapPage() {
               {gap.matched_skills.map((s) => (
                 <span
                   key={s.skill}
-                  className="rounded-full bg-primary/10 px-3 py-1.5 text-label-md text-primary"
-                  title={`${s.jobs_requiring} jobs require this`}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1.5 text-label-md text-primary"
+                  title={`${s.jobs_requiring} jobs require this${s.verified ? " • verified in testing" : ""}`}
                 >
                   {s.skill}
+                  {s.confidence && <ConfidenceBadge level={s.confidence} />}
                 </span>
               ))}
             </div>
@@ -280,8 +432,11 @@ export default function SkillGapPage() {
                   key={p.skill}
                   className="rounded-2xl border-l-4 border-primary bg-surface-container-lowest p-5 shadow-sm"
                 >
-                  <div className="mb-1 flex items-center justify-between">
-                    <h4 className="text-label-md font-bold text-on-surface">{p.skill}</h4>
+                  <div className="mb-1 flex items-center justify-between gap-2">
+                    <h4 className="flex items-center gap-2 text-label-md font-bold text-on-surface">
+                      {p.skill}
+                      {p.confidence && <ConfidenceBadge level={p.confidence} />}
+                    </h4>
                     <span className="rounded-full bg-primary/10 px-3 py-1 text-[11px] font-bold text-primary">
                       {p.priority_score}
                     </span>
@@ -328,8 +483,11 @@ export default function SkillGapPage() {
           )}
 
           <div className="ambient-shadow rounded-2xl border border-outline-variant bg-surface-container-lowest p-8">
-            <p className="mb-6 text-label-sm uppercase tracking-widest text-secondary">
-              Market Context
+            <p className="mb-1 text-label-sm uppercase tracking-widest text-secondary">
+              Market Evidence
+            </p>
+            <p className="mb-6 text-sm text-secondary">
+              Real postings backing this analysis.
             </p>
             {gap.sample_jobs.length === 0 ? (
               <p className="text-sm text-secondary">No matching jobs found yet.</p>
@@ -341,15 +499,30 @@ export default function SkillGapPage() {
                     href={job.source_url}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="group flex items-center justify-between rounded-xl border border-outline-variant/50 bg-white p-4 transition-colors hover:border-primary"
+                    className="group block rounded-xl border border-outline-variant/50 bg-white p-4 transition-colors hover:border-primary"
                   >
-                    <div>
-                      <p className="text-label-md font-bold text-on-surface group-hover:text-primary">
-                        {job.title}
-                      </p>
-                      <p className="text-sm text-secondary">{job.company}</p>
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="truncate text-label-md font-bold text-on-surface group-hover:text-primary">
+                          {job.title}
+                        </p>
+                        <p className="text-sm text-secondary">{job.company}</p>
+                      </div>
+                      {job.match_score != null && (
+                        <span className="shrink-0 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-bold text-primary">
+                          {job.match_score}%
+                        </span>
+                      )}
                     </div>
-                    <Icon name="open_in_new" size={16} className="text-secondary" />
+                    {job.matched_skills?.length > 0 && (
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        {job.matched_skills.slice(0, 4).map((skill) => (
+                          <span key={skill} className="rounded-full bg-primary/5 px-2 py-0.5 text-[11px] font-medium text-primary">
+                            {skill}
+                          </span>
+                        ))}
+                      </div>
+                    )}
                   </a>
                 ))}
               </div>

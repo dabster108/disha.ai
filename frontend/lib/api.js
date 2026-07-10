@@ -157,6 +157,8 @@ export const matchJobs = (profileId, opts = {}) =>
 export const getJobMatches = (profileId, n) =>
   apiFetch(`/api/jobs/match/${profileId}${n ? `?n=${n}` : ""}`);
 
+export const getJobCorpusStatus = () => apiFetch("/api/jobs/status");
+
 // ---------------------------------------------------------------------------
 // Roadmap
 // ---------------------------------------------------------------------------
@@ -167,10 +169,16 @@ export const createRoadmap = (profileId, opts = {}) =>
 
 export const getLatestRoadmap = (profileId) => apiFetch(`/api/roadmap/${profileId}`);
 
-export const updateRoadmapProgress = (profileId, week, taskIndex, completed) =>
+/** Toggle a whole task, or a single resource when resourceIndex is provided. */
+export const updateRoadmapProgress = (profileId, week, taskIndex, completed, resourceIndex = null) =>
   apiFetch(`/api/roadmap/${profileId}/progress`, {
     method: "PATCH",
-    json: { week, task_index: taskIndex, completed },
+    json: {
+      week,
+      task_index: taskIndex,
+      completed,
+      ...(resourceIndex != null ? { resource_index: resourceIndex } : {}),
+    },
   });
 
 // ---------------------------------------------------------------------------
@@ -185,7 +193,9 @@ export async function synthesizeSpeech(text) {
     const data = await response.json().catch(() => null);
     throw new ApiError(extractErrorMessage(data, "Voice synthesis failed"), response.status, data);
   }
-  return response.blob();
+  const provider = response.headers.get("X-TTS-Provider");
+  const blob = await response.blob();
+  return { blob, provider };
 }
 
 /** @param {Blob} audioBlob */
