@@ -1,142 +1,278 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  answerInterview,
-  getInterviewHistory,
-  transcribeAudio,
-  ApiError,
-} from "@/lib/api";
-import {
-  INTERVIEW_MAX_TURNS,
-  loadInterviewSessionPrefs,
-} from "@/lib/interviewUtils";
+import { answerInterview, getInterviewHistory, transcribeAudio, ApiError } from "@/lib/api";
+import { loadInterviewSessionPrefs, formatInterviewSummary } from "@/lib/interviewUtils";
 import { useAudioRecorder } from "./useAudioRecorder";
 import { useTtsPlayer } from "./useTtsPlayer";
+import { useLiveTranscript } from "./useLiveTranscript";
 import { usePracticeTimer } from "./usePracticeTimer";
 
 const WELCOME_KEY_PREFIX = "disha-interview-welcome-";
+const BOOTSTRAP_KEY_PREFIX = "disha-interview-bootstrap-";
 
-/** @typedef {'loading'|'disha_speaking'|'listening'|'recording'|'transcribing'|'evaluating'|'feedback'|'session_timeout'|'completed'} SessionState */
+/** @typedef {'loading'|'idle'|'recording'|'transcribing'|'thinking'|'speaking'|'completed'|'timeout'} Phase */
+
+let messageSeq = 0;
+const nextId = () => {
+  messageSeq += 1;
+  return `m${messageSeq}`;
+};
 
 /**
- * Voice-first interview session state machine.
- * @param {{ sessionId: string | null, profileId: string | null, router: import('next/navigation').AppRouterInstance }} opts
+ * Conversational (chat-style) interview controller.
+ * Shared text + voice composer, live interim transcription, optimistic user
+ * bubbles, a typing indicator, and split feedback/question speech so text
+ * appears instantly without waiting on audio.
  */
 export function useVoiceInterview({ sessionId, profileId, router }) {
-  const [sessionState, setSessionState] = useState(/** @type {SessionState} */ ("loading"));
-  const [session, setSession] = useState(null);
-  const [currentTurn, setCurrentTurn] = useState(null);
-  const [evaluated, setEvaluated] = useState(null);
-  const [nextTurn, setNextTurn] = useState(null);
-  const [transcript, setTranscript] = useState("");
-  const [textAnswer, setTextAnswer] = useState("");
-  const [error, setError] = useState(null);
-  const [textMode, setTextModeState] = useState(false);
-  const [autoContinue, setAutoContinue] = useState(true);
-  const [sessionStartTime, setSessionStartTime] = useState(null);
-  const [lastScore, setLastScore] = useState(null);
-  const [coachTip, setCoachTip] = useState(null);
-  const [submitting, setSubmitting] = useState(false);
-  const [dishaCaption, setDishaCaption] = useState("");
-  const [sttUnavailable, setSttUnavailable] = useState(false);
-  const [sessionDurationMinutes, setSessionDurationMinutes] = useState(15);
+  const [phase, setPhase] = useState(/** @type {Phase} */ ("loading"));
   const [messages, setMessages] = useState([]);
-
-  const messageIdRef = useRef(0);
-  const pushMessage = useCallback((role, text, extra = {}) => {
-    if (!text?.trim()) return;
-    messageIdRef.current += 1;
-    setMessages((prev) => [...prev, { id: messageIdRef.current, role, text: text.trim(), ...extra }]);
-  }, []);
-
-  const ttsPlayer = useTtsPlayer();
-  const ttsUnavailable = ttsPlayer.ttsUnavailable;
-  const muted = ttsPlayer.muted;
-
-  const initDoneRef = useRef(false);
-  const advanceTimerRef = useRef(null);
-  const continueFromFeedbackRef = useRef(null);
-  const questionExpireHandlerRef = useRef(null);
-  const finishRecordingRef = useRef(null);
-  const processingRecordingRef = useRef(false);
-  const sessionStateRef = useRef(sessionState);
+  const [composerText, setComposerText] = useState("");
+  const [error, setError] = useState(null);
+  const [micSupported, setMicSupported] = useState(true);
+  const [voiceMode, setVoiceMode] = useState(true);
+  const [session, setSession] = useState(null);
+  const [sessionDurationMinutes, setSessionDurationMinutes] = useState(15);
 
   const recorder = useAudioRecorder();
-  const abortSpeaking = ttsPlayer.abortSpeaking;
+  const ttsPlayer = useTtsPlayer();
+  const live = useLiveTranscript();
+
+  const processingRef = useRef(false);
+  const answeringRef = useRef(false);
+  const voiceModeRef = useRef(true);
+  const phaseRef = useRef(phase);
+  const advanceTimerRef = useRef(null);
+  const handlersRef = useRef({});
+  const speakRef = useRef(null);
+  const beginRecordingRef = useRef(null);
+  const timerRef = useRef(null);
 
   useEffect(() => {
-    sessionStateRef.current = sessionState;
-  }, [sessionState]);
+    phaseRef.current = phase;
+  }, [phase]);
+  useEffect(() => {
+    voiceModeRef.current = voiceMode;
+  }, [voiceMode]);
 
+  const pushMessage = useCallback((role, text, extra = {}) => {
+    const id = nextId();
+    setMessages((prev) => [...prev, { id, role, text, ...extra }]);
+    return id;
+  }, []);
+
+  // ---- timers ------------------------------------------------------------
   const handleSessionExpire = useCallback(() => {
     recorder.cleanup();
-    abortSpeaking();
-    setSessionState("session_timeout");
+    ttsPlayer.abortSpeaking();
+    live.stop();
+    setPhase("timeout");
     router.push(`/mock-interview/report?session=${sessionId}`);
-  }, [abortSpeaking, recorder, router, sessionId]);
-
-  const handleQuestionExpire = useCallback(async () => {
-    const state = sessionStateRef.current;
-    if (state === "recording") {
-      finishRecordingRef.current?.finishRecordingAndSubmit();
-      return;
-    }
-    if (state === "listening") {
-      questionExpireHandlerRef.current?.submitAnswer(
-        "I ran out of time on this question and would like to move on."
-      );
-    }
-  }, [recorder]);
+  }, [recorder, ttsPlayer, live, router, sessionId]);
 
   const timer = usePracticeTimer({
     sessionDurationMinutes,
-    challengeCount: INTERVIEW_MAX_TURNS,
+    challengeCount: 1,
     onSessionExpire: handleSessionExpire,
-    onChallengeExpire: handleQuestionExpire,
+    onChallengeExpire: () => {},
   });
+  timerRef.current = timer;
 
-  const pauseTimersForSpeech = useCallback(() => {
-    timer.pauseTimers();
-  }, [timer]);
+  // ---- speech ------------------------------------------------------------
+  const speak = useCallback(
+    async (text) => {
+      if (!text?.trim() || ttsPlayer.muted) return;
+      timer.pauseTimers();
+      await ttsPlayer.playTts(text);
+    },
+    [ttsPlayer, timer]
+  );
+  speakRef.current = speak;
 
-  const resumeTimersForListen = useCallback(() => {
+  // ---- recording ---------------------------------------------------------
+  const beginRecording = useCallback(async () => {
+    if (!micSupported) return;
+    if (recorder.isRecordingActive?.() || recorder.isRecording) return;
+    if (["thinking", "transcribing", "loading"].includes(phaseRef.current)) return;
+
+    setError(null);
+    setVoiceMode(true);
+    live.reset();
+    live.start();
+    setPhase("recording");
     timer.resumeTimers();
-    timer.startChallengeTimer();
-  }, [timer]);
 
-  const playTts = useCallback(
-    async (text) => {
-      if (!text?.trim() || muted) {
-        if (text?.trim()) setDishaCaption(text.trim());
-        return false;
+    try {
+      await recorder.startRecording({
+        onAutoStop: () => handlersRef.current.finishAndSubmit?.(),
+      });
+    } catch {
+      live.stop();
+      setMicSupported(false);
+      setVoiceMode(false);
+      setPhase("idle");
+    }
+  }, [micSupported, recorder, live, timer]);
+  beginRecordingRef.current = beginRecording;
+
+  /** Re-open the mic after DISHA speaks — always leaves phase in recording or idle. */
+  const armListening = useCallback(async () => {
+    if (voiceModeRef.current && micSupported) {
+      setPhase("idle");
+      await beginRecording();
+      if (!recorder.isRecordingActive?.() && !recorder.isRecording) {
+        setPhase("idle");
       }
+    } else {
+      setPhase("idle");
+    }
+  }, [micSupported, recorder, beginRecording]);
 
-      setDishaCaption(text.trim());
-      setSessionState("disha_speaking");
-      pauseTimersForSpeech();
-      return await ttsPlayer.playTts(text);
+  const submitAnswer = useCallback(
+    async (answerText) => {
+      const text = answerText?.trim();
+      if (!text || !sessionId || answeringRef.current) return;
+
+      answeringRef.current = true;
+      setPhase("thinking");
+      timer.pauseTimers();
+
+      try {
+        const result = await answerInterview(sessionId, text);
+
+        if (result.interview_completed) {
+          const summaryText = formatInterviewSummary(result.session);
+          pushMessage("disha", summaryText, { kind: "summary", score: result.session.overall_score });
+          setSession(result.session);
+          setPhase("speaking");
+          try {
+            const spokenScore =
+              result.session.overall_score != null
+                ? `Your overall score is ${result.session.overall_score} out of 10. `
+                : "";
+            await speak(
+              `${spokenScore}That wraps up your mock interview. I've posted your full analysis in the chat.`
+            );
+          } finally {
+            setPhase("completed");
+          }
+          return;
+        }
+
+        const nextQ = result.next_question;
+        if (nextQ) pushMessage("disha", nextQ.question, { kind: "question" });
+
+        setPhase("speaking");
+        try {
+          if (nextQ?.question) await speak(nextQ.question);
+        } finally {
+          timer.resumeTimers();
+          await armListening();
+        }
+      } catch (err) {
+        setError(err);
+        setPhase("idle");
+        timer.resumeTimers();
+        if (voiceModeRef.current && micSupported) {
+          await armListening();
+        }
+      } finally {
+        answeringRef.current = false;
+      }
     },
-    [muted, pauseTimersForSpeech, ttsPlayer]
+    [sessionId, timer, pushMessage, speak, micSupported, armListening]
   );
 
-  const speakThenListen = useCallback(
-    async (text) => {
-      await playTts(text);
-      if (textMode) {
-        setSessionState("listening");
-        return;
+  const submitVoice = useCallback(
+    async (blob) => {
+      setPhase("transcribing");
+      try {
+        const { transcript } = await transcribeAudio(blob);
+        const clean = transcript?.trim();
+        if (!clean) {
+          setError(new Error("Couldn't hear you — try again."));
+          await armListening();
+          return;
+        }
+        pushMessage("user", clean, { kind: "answer" });
+        await submitAnswer(clean);
+      } catch (err) {
+        if (err instanceof ApiError && err.status === 503) {
+          setMicSupported(false);
+          setVoiceMode(false);
+          setError(new Error("Speech recognition unavailable — please type your answer."));
+        } else if (err instanceof ApiError && err.status === 422) {
+          setError(new Error("Couldn't hear you — try again."));
+        } else {
+          setError(err);
+        }
+        setPhase("idle");
       }
-      resumeTimersForListen();
-      await finishRecordingRef.current?.beginAutoListen();
     },
-    [playTts, resumeTimersForListen, textMode]
+    [pushMessage, submitAnswer, armListening]
   );
 
+  const finishAndSubmit = useCallback(async () => {
+    if (processingRef.current) return;
+    processingRef.current = true;
+    try {
+      live.stop();
+      if (!recorder.isRecording && phaseRef.current !== "recording") return;
+      setPhase("transcribing");
+      timer.pauseTimers();
+      const blob = await recorder.stopRecording();
+      if (blob && blob.size > 0) {
+        await submitVoice(blob);
+      } else {
+        setError(new Error("Couldn't hear you — try again."));
+        await armListening();
+      }
+    } finally {
+      processingRef.current = false;
+    }
+  }, [live, recorder, timer, submitVoice, armListening]);
+
+  handlersRef.current.finishAndSubmit = finishAndSubmit;
+
+  const toggleMic = useCallback(async () => {
+    if (!micSupported) return;
+    if (recorder.isRecording || phaseRef.current === "recording") {
+      await finishAndSubmit();
+      return;
+    }
+    if (["thinking", "transcribing", "speaking", "loading"].includes(phaseRef.current)) return;
+    await beginRecording();
+  }, [micSupported, recorder, finishAndSubmit, beginRecording]);
+
+  const sendText = useCallback(async () => {
+    const text = composerText.trim();
+    if (!text) return;
+    if (answeringRef.current || ["thinking", "transcribing", "speaking", "loading"].includes(phaseRef.current)) {
+      return;
+    }
+    if (recorder.isRecording || recorder.isRecordingActive?.()) {
+      await finishAndSubmit();
+      return;
+    }
+    setComposerText("");
+    setVoiceMode(false);
+    pushMessage("user", text, { kind: "answer" });
+    await submitAnswer(text);
+  }, [composerText, pushMessage, submitAnswer, recorder, finishAndSubmit]);
+
+  const endInterview = useCallback(() => {
+    recorder.cleanup();
+    ttsPlayer.abortSpeaking();
+    live.stop();
+    router.push(`/mock-interview/report?session=${sessionId}`);
+  }, [recorder, ttsPlayer, live, router, sessionId]);
+
+  // ---- init --------------------------------------------------------------
   const loadSession = useCallback(async () => {
     if (!sessionId || !profileId) return null;
     const sessions = await getInterviewHistory(profileId);
-    const found = sessions.find((s) => s.id === sessionId);
+    const found = sessions.find((s) => String(s.id) === String(sessionId));
     if (!found) throw new Error("Interview session not found.");
     if (found.status === "completed") {
       router.replace(`/mock-interview/report?session=${sessionId}`);
@@ -145,491 +281,198 @@ export function useVoiceInterview({ sessionId, profileId, router }) {
     const pending = [...found.turns]
       .sort((a, b) => a.turn_index - b.turn_index)
       .find((t) => t.answer == null);
-    return { session: found, currentTurn: pending || null };
+    return { session: found, pending: pending || null };
   }, [sessionId, profileId, router]);
 
-  const runInitialFlow = useCallback(
-    async (foundSession, pendingTurn) => {
-      if (!pendingTurn) {
-        router.replace(`/mock-interview/report?session=${sessionId}`);
-        return;
-      }
-
-      const answeredCount = foundSession.turns.filter((t) => t.answer != null).length;
-      const isFresh = answeredCount === 0 && pendingTurn.turn_index === 1;
-      const welcomeKey = `${WELCOME_KEY_PREFIX}${sessionId}`;
-      const welcomeRaw =
-        typeof window !== "undefined" ? sessionStorage.getItem(welcomeKey) : null;
-
-      let welcomeMessage = null;
-      if (isFresh && welcomeRaw) {
-        try {
-          welcomeMessage = JSON.parse(welcomeRaw).welcome_message || null;
-        } catch {
-          welcomeMessage = null;
-        }
-        sessionStorage.removeItem(welcomeKey);
-      }
-
-      // Speak welcome + question as one continuous utterance, but render them
-      // as two separate chat bubbles so the thread reads naturally.
-      if (welcomeMessage) pushMessage("disha", welcomeMessage, { kind: "welcome" });
-      pushMessage("disha", pendingTurn.question, { kind: "question" });
-
-      const speech = welcomeMessage ? `${welcomeMessage} ${pendingTurn.question}` : pendingTurn.question;
-      setDishaCaption(speech);
-
-      if (!muted) {
-        await speakThenListen(speech);
-      } else {
-        setSessionState("listening");
-        resumeTimersForListen();
-      }
-    },
-    [muted, pushMessage, resumeTimersForListen, router, sessionId, speakThenListen]
-  );
-
-  const ensureMicOrTextMode = useCallback(async () => {
+  const ensureMic = useCallback(async () => {
     if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setTextModeState(true);
+      setMicSupported(false);
+      setVoiceMode(false);
       return false;
     }
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      stream.getTracks().forEach((track) => track.stop());
+      stream.getTracks().forEach((t) => t.stop());
       return true;
     } catch {
-      setTextModeState(true);
-      setError(
-        new Error("Microphone access denied — switched to text mode. You can still complete the interview.")
-      );
+      setMicSupported(false);
+      setVoiceMode(false);
       return false;
     }
   }, []);
 
-  const init = useCallback(async () => {
-    if (!sessionId || !profileId || initDoneRef.current) return;
-    // Set the guard synchronously, before any await, so a second concurrent
-    // invocation (e.g. React StrictMode's dev-mode double-invoke of mount
-    // effects) can never race past this check — otherwise both calls reach
-    // runInitialFlow() and DISHA's welcome/question gets spoken twice.
-    initDoneRef.current = true;
-    setSessionState("loading");
-    setError(null);
+  // Stable bootstrap effect — only re-runs when session or profile changes.
+  // Uses refs for speak/recording/timer so timer ticks don't retrigger init.
+  useEffect(() => {
+    let cancelled = false;
 
-    try {
-      const prefs = loadInterviewSessionPrefs(sessionId);
-      setSessionDurationMinutes(prefs.minutes);
+    async function bootstrap() {
+      if (!sessionId || !profileId) return;
 
-      const data = await loadSession();
-      if (!data) return;
+      setPhase("loading");
+      setMessages([]);
+      setError(null);
 
-      setSession(data.session);
-      setCurrentTurn(data.currentTurn);
-      setSessionStartTime(new Date(data.session.started_at).getTime());
+      try {
+        const prefs = loadInterviewSessionPrefs(sessionId);
+        setSessionDurationMinutes(prefs.minutes);
 
-      const answeredTurns = [...data.session.turns]
-        .sort((a, b) => a.turn_index - b.turn_index)
-        .filter((t) => t.answer != null);
-      const historyMessages = [];
-      let historyId = 0;
-      for (const t of answeredTurns) {
-        historyMessages.push({ id: `h${historyId++}`, role: "disha", kind: "question", text: t.question });
-        historyMessages.push({ id: `h${historyId++}`, role: "user", kind: "answer", text: t.answer });
-        if (t.feedback != null && t.score != null) {
-          historyMessages.push({
-            id: `h${historyId++}`,
+        // Instant UI from data stored at interview start (no history round-trip).
+        const bootstrapKey = `${BOOTSTRAP_KEY_PREFIX}${sessionId}`;
+        let bootstrapWelcome = null;
+        if (typeof window !== "undefined") {
+          const raw = sessionStorage.getItem(bootstrapKey);
+          if (raw) {
+            try {
+              const boot = JSON.parse(raw);
+              const instant = [];
+              if (boot.welcome_message) {
+                bootstrapWelcome = boot.welcome_message;
+                instant.push({
+                  id: nextId(),
+                  role: "disha",
+                  kind: "welcome",
+                  text: boot.welcome_message,
+                });
+              }
+              if (boot.question) {
+                instant.push({
+                  id: nextId(),
+                  role: "disha",
+                  kind: "question",
+                  text: boot.question,
+                });
+              }
+              if (instant.length > 0) {
+                setMessages(instant);
+                setSession({
+                  target_role: boot.target_role || "",
+                  started_at: boot.started_at,
+                });
+                setPhase("idle");
+              }
+              sessionStorage.removeItem(bootstrapKey);
+            } catch {
+              /* ignore malformed bootstrap */
+            }
+          }
+        }
+
+        const data = await loadSession();
+        if (cancelled) return;
+        if (!data) return;
+
+        setSession(data.session);
+
+        const answered = [...data.session.turns]
+          .sort((a, b) => a.turn_index - b.turn_index)
+          .filter((t) => t.answer != null);
+        const history = [];
+        for (const t of answered) {
+          history.push({ id: nextId(), role: "disha", kind: "question", text: t.question });
+          history.push({ id: nextId(), role: "user", kind: "answer", text: t.answer });
+        }
+
+        const elapsedMs = Date.now() - new Date(data.session.started_at).getTime();
+        const remainingMs = Math.max(0, prefs.minutes * 60 * 1000 - elapsedMs);
+        if (remainingMs <= 0 || !data.pending) {
+          router.replace(`/mock-interview/report?session=${sessionId}`);
+          return;
+        }
+
+        const t = timerRef.current;
+        t?.setSessionRemainingMs(remainingMs);
+        t?.startSessionTimer();
+
+        const isFresh = answered.length === 0 && data.pending.turn_index === 1;
+        let welcome = bootstrapWelcome;
+        const welcomeKey = `${WELCOME_KEY_PREFIX}${sessionId}`;
+        if (!welcome && isFresh && typeof window !== "undefined") {
+          const raw = sessionStorage.getItem(welcomeKey);
+          if (raw) {
+            try {
+              welcome = JSON.parse(raw).welcome_message || null;
+            } catch {
+              welcome = null;
+            }
+            sessionStorage.removeItem(welcomeKey);
+          }
+        }
+
+        if (welcome && !history.some((m) => m.kind === "welcome")) {
+          history.push({ id: nextId(), role: "disha", kind: "welcome", text: welcome });
+        }
+        if (!history.some((m) => m.kind === "question" && m.text === data.pending.question)) {
+          history.push({
+            id: nextId(),
             role: "disha",
-            kind: "feedback",
-            text: `Score ${t.score}/10 — ${t.feedback}`,
-            score: t.score,
+            kind: "question",
+            text: data.pending.question,
           });
         }
+
+        setMessages(history);
+        // Show chat immediately — don't wait for mic permission or TTS.
+        setPhase("idle");
+
+        const micOk = await ensureMic();
+        if (cancelled) return;
+
+        setPhase("speaking");
+        const speech = welcome
+          ? `${welcome} ${data.pending.question}`
+          : data.pending.question;
+        try {
+          await speakRef.current?.(speech);
+        } finally {
+          if (cancelled) return;
+          if (micOk && voiceModeRef.current) {
+            setPhase("idle");
+            await beginRecordingRef.current?.();
+            if (!recorder.isRecordingActive?.() && !recorder.isRecording) {
+              setPhase("idle");
+            }
+          } else {
+            setPhase("idle");
+          }
+        }
+      } catch (err) {
+        if (cancelled) return;
+        setError(err);
+        setPhase("idle");
       }
-      if (historyMessages.length > 0) setMessages(historyMessages);
-
-      const elapsedMs = Date.now() - new Date(data.session.started_at).getTime();
-      const totalSessionMs = prefs.minutes * 60 * 1000;
-      const remainingSessionMs = Math.max(0, totalSessionMs - elapsedMs);
-
-      if (remainingSessionMs <= 0) {
-        setSessionState("session_timeout");
-        router.replace(`/mock-interview/report?session=${sessionId}`);
-        return;
-      }
-
-      timer.setSessionRemainingMs(remainingSessionMs);
-      timer.startSessionTimer();
-      timer.startChallengeTimer();
-
-      const micOk = await ensureMicOrTextMode();
-      await runInitialFlow(data.session, data.currentTurn);
-      if (!micOk) {
-        // Mic denied: type answers, but DISHA still speaks questions above.
-      }
-    } catch (err) {
-      setError(err);
-      setSessionState("listening");
     }
-  }, [ensureMicOrTextMode, loadSession, profileId, router, runInitialFlow, sessionId, timer]);
 
-  useEffect(() => {
-    init();
-  }, [init]);
+    bootstrap();
 
-  useEffect(() => {
     return () => {
-      abortSpeaking();
+      cancelled = true;
+      ttsPlayer.abortSpeaking();
       recorder.cleanup();
+      live.stop();
       if (advanceTimerRef.current) clearTimeout(advanceTimerRef.current);
     };
-  }, [abortSpeaking, recorder]);
-
-  const setTextMode = useCallback(
-    (value) => {
-      setTextModeState(value);
-      if (value) abortSpeaking();
-      if (value && sessionState === "disha_speaking") {
-        resumeTimersForListen();
-        setSessionState("listening");
-      }
-    },
-    [abortSpeaking, resumeTimersForListen, sessionState]
-  );
-
-  const submitAnswer = useCallback(
-    async (answerText) => {
-      if (!answerText?.trim() || !sessionId) return;
-      pushMessage("user", answerText.trim(), { kind: "answer" });
-      setSubmitting(true);
-      setError(null);
-      setSessionState("evaluating");
-      pauseTimersForSpeech();
-
-      try {
-        const result = await answerInterview(sessionId, answerText.trim());
-        setEvaluated(result.evaluated_turn);
-        setLastScore(result.evaluated_turn.score);
-        setCoachTip(result.evaluated_turn.feedback);
-        setTranscript(answerText.trim());
-
-        const feedbackText = `Score ${result.evaluated_turn.score} out of 10. ${result.evaluated_turn.feedback}`;
-        pushMessage(
-          "disha",
-          `Score ${result.evaluated_turn.score}/10 — ${result.evaluated_turn.feedback}`,
-          { kind: "feedback", score: result.evaluated_turn.score }
-        );
-
-        if (result.interview_completed) {
-          setNextTurn(null);
-          setSessionState("feedback");
-
-          const closingLine = "That wraps up your mock interview. Let's review your report.";
-          pushMessage("disha", closingLine, { kind: "closing" });
-          const closing = `${feedbackText} ${closingLine}`;
-
-          if (!muted) {
-            await playTts(closing);
-          } else {
-            setDishaCaption(closing);
-          }
-
-          advanceTimerRef.current = setTimeout(() => {
-            setSessionState("completed");
-            router.push(`/mock-interview/report?session=${sessionId}`);
-          }, autoContinue ? 2000 : 60000);
-          return;
-        }
-
-        setNextTurn(result.next_question);
-        setSessionState("feedback");
-
-        const nextSpeech = result.next_question
-          ? `${feedbackText} Next question. ${result.next_question.question}`
-          : feedbackText;
-
-        if (!muted) {
-          await playTts(nextSpeech);
-        } else {
-          setDishaCaption(nextSpeech);
-        }
-
-        if (autoContinue && result.next_question) {
-          if (!muted) {
-            pushMessage("disha", result.next_question.question, { kind: "question" });
-            setCurrentTurn(result.next_question);
-            setEvaluated(null);
-            setNextTurn(null);
-            setTranscript("");
-            setTextAnswer("");
-            setDishaCaption(result.next_question.question);
-            resumeTimersForListen();
-            await finishRecordingRef.current?.beginAutoListen();
-          } else {
-            advanceTimerRef.current = setTimeout(() => {
-              continueFromFeedbackRef.current?.(result.next_question);
-            }, 1200);
-          }
-        }
-      } catch (err) {
-        setError(err);
-        resumeTimersForListen();
-        setSessionState("listening");
-      } finally {
-        setSubmitting(false);
-      }
-    },
-    [
-      autoContinue,
-      muted,
-      pauseTimersForSpeech,
-      playTts,
-      pushMessage,
-      resumeTimersForListen,
-      router,
-      sessionId,
-      textMode,
-      ttsUnavailable,
-    ]
-  );
-
-  const continueFromFeedback = useCallback(
-    async (turnOverride) => {
-      if (advanceTimerRef.current) {
-        clearTimeout(advanceTimerRef.current);
-        advanceTimerRef.current = null;
-      }
-
-      const turn = turnOverride ?? nextTurn;
-      if (!turn) {
-        setSessionState("completed");
-        router.push(`/mock-interview/report?session=${sessionId}`);
-        return;
-      }
-
-      pushMessage("disha", turn.question, { kind: "question" });
-      setCurrentTurn(turn);
-      setEvaluated(null);
-      setNextTurn(null);
-      setTranscript("");
-      setTextAnswer("");
-      setDishaCaption(turn.question);
-
-      if (!muted) {
-        await speakThenListen(turn.question);
-      } else {
-        resumeTimersForListen();
-        setSessionState("listening");
-      }
-    },
-    [muted, nextTurn, pushMessage, resumeTimersForListen, router, sessionId, speakThenListen]
-  );
-
-  continueFromFeedbackRef.current = continueFromFeedback;
-
-  const submitVoiceAnswer = useCallback(
-    async (blob) => {
-      setSessionState("transcribing");
-      setError(null);
-      pauseTimersForSpeech();
-
-      try {
-        const { transcript: sttText } = await transcribeAudio(blob);
-        if (!sttText?.trim()) {
-          setError(new Error("Couldn't hear you — try again."));
-          resumeTimersForListen();
-          if (!textMode) {
-            await finishRecordingRef.current?.beginAutoListen();
-          } else {
-            setSessionState("listening");
-          }
-          return;
-        }
-        setTranscript(sttText);
-        await submitAnswer(sttText);
-      } catch (err) {
-        if (err instanceof ApiError && err.status === 503) {
-          setSttUnavailable(true);
-          setError(
-            new Error("Speech recognition unavailable — type your answer or try again later.")
-          );
-          setTextModeState(true);
-        } else if (err instanceof ApiError && err.status === 422) {
-          setError(new Error("Couldn't hear you — try again."));
-        } else {
-          setError(err);
-        }
-        resumeTimersForListen();
-        if (!textMode) {
-          await finishRecordingRef.current?.beginAutoListen();
-        } else {
-          setSessionState("listening");
-        }
-      }
-    },
-    [pauseTimersForSpeech, resumeTimersForListen, submitAnswer, textMode]
-  );
-
-  const finishRecordingAndSubmit = useCallback(async () => {
-    if (processingRecordingRef.current) return;
-    processingRecordingRef.current = true;
-
-    try {
-      if (!recorder.isRecording && sessionStateRef.current !== "recording") {
-        return;
-      }
-
-      setSessionState("transcribing");
-      pauseTimersForSpeech();
-      const blob = await recorder.stopRecording();
-      if (blob && blob.size > 0) {
-        await submitVoiceAnswer(blob);
-      } else {
-        setError(new Error("Couldn't hear you — try again."));
-        resumeTimersForListen();
-        if (!textMode) {
-          await finishRecordingRef.current?.beginAutoListen();
-        } else {
-          setSessionState("listening");
-        }
-      }
-    } finally {
-      processingRecordingRef.current = false;
-    }
-  }, [pauseTimersForSpeech, recorder, resumeTimersForListen, submitVoiceAnswer, textMode]);
-
-  const beginAutoListen = useCallback(async () => {
-    if (textMode || submitting || muted) {
-      setSessionState("listening");
-      return;
-    }
-    if (recorder.isRecording) return;
-
-    try {
-      setSessionState("recording");
-      await recorder.startRecording({
-        onAutoStop: () => {
-          finishRecordingAndSubmit();
-        },
-      });
-    } catch {
-      setTextMode(true);
-      setSessionState("listening");
-    }
-  }, [finishRecordingAndSubmit, muted, recorder, submitting, setTextMode, textMode]);
-
-  finishRecordingRef.current = { beginAutoListen, finishRecordingAndSubmit };
-
-  questionExpireHandlerRef.current = { submitAnswer, submitVoice: submitVoiceAnswer };
-
-
-  const toggleRecording = useCallback(async () => {
-    if (textMode) return;
-    if (sessionState === "disha_speaking" || sessionState === "transcribing" || sessionState === "evaluating") {
-      return;
-    }
-
-    if (recorder.error) {
-      setTextMode(true);
-      setError(recorder.error);
-      return;
-    }
-
-    if (recorder.isRecording) {
-      await finishRecordingAndSubmit();
-    } else if (sessionState === "listening" || sessionState === "recording") {
-      await beginAutoListen();
-    }
-  }, [
-    beginAutoListen,
-    finishRecordingAndSubmit,
-    recorder,
-    sessionState,
-    setTextMode,
-    textMode,
-  ]);
-
-  const startHoldRecording = useCallback(async () => {
-    if (sessionState !== "listening" || recorder.isRecording) return;
-    await beginAutoListen();
-  }, [beginAutoListen, recorder, sessionState]);
-
-  const stopHoldRecording = useCallback(async () => {
-    if (!recorder.isRecording) return;
-    await finishRecordingAndSubmit();
-  }, [finishRecordingAndSubmit, recorder]);
-
-  const skipSpeaking = useCallback(() => {
-    abortSpeaking();
-    if (sessionState === "disha_speaking") {
-      resumeTimersForListen();
-      setSessionState("listening");
-    }
-  }, [abortSpeaking, resumeTimersForListen, sessionState]);
-
-  const handleTextSubmit = useCallback(
-    async (e) => {
-      e?.preventDefault?.();
-      const text = textAnswer;
-      setTextAnswer("");
-      await submitAnswer(text);
-    },
-    [submitAnswer, textAnswer]
-  );
-
-  const liveUserCaption =
-    sessionState === "recording"
-      ? recorder.speechDetected
-        ? "Hearing you — will submit when you pause…"
-        : "Listening — speak your answer…"
-      : sessionState === "transcribing"
-        ? "Transcribing your answer…"
-        : sessionState === "evaluating"
-          ? "DISHA is evaluating…"
-          : sessionState === "listening"
-            ? "Get ready — mic opens automatically…"
-            : "";
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionId, profileId]);
 
   return {
-    sessionState,
-    session,
-    currentTurn,
-    evaluated,
-    nextTurn,
-    transcript,
-    textAnswer,
-    setTextAnswer,
+    phase,
+    messages,
     error,
     setError,
-    textMode,
-    setTextMode,
-    ttsUnavailable,
-    ttsProvider: ttsPlayer.ttsProvider,
-    sttUnavailable,
-    autoContinue,
-    setAutoContinue,
-    sessionStartTime,
-    sessionDurationMinutes,
+    composerText,
+    setComposerText,
+    interimText: live.interimText,
+    volume: recorder.volume,
+    recording: recorder.isRecording || phase === "recording",
+    micSupported,
+    isThinking: phase === "thinking",
+    isSpeaking: phase === "speaking",
+    toggleMic,
+    sendText,
+    endInterview,
+    targetRole: session?.target_role || "",
     sessionRemainingMs: timer.sessionRemainingMs,
-    questionRemainingMs: timer.challengeRemainingMs,
-    lastScore,
-    coachTip,
-    submitting,
-    muted,
-    setMuted: ttsPlayer.setMuted,
-    dishaCaption,
-    liveUserCaption,
-    messages,
-    recorder,
-    playTts,
-    abortSpeaking,
-    skipSpeaking,
-    toggleRecording,
-    startHoldRecording,
-    stopHoldRecording,
-    continueFromFeedback,
-    handleTextSubmit,
-    submitAnswer,
   };
 }
 
@@ -640,4 +483,10 @@ export function storeInterviewWelcome(sessionId, welcomeMessage) {
     `${WELCOME_KEY_PREFIX}${sessionId}`,
     JSON.stringify({ welcome_message: welcomeMessage })
   );
+}
+
+/** Store session bootstrap so the active page can render chat instantly. */
+export function storeInterviewBootstrap(sessionId, payload) {
+  if (typeof window === "undefined") return;
+  sessionStorage.setItem(`${BOOTSTRAP_KEY_PREFIX}${sessionId}`, JSON.stringify(payload));
 }

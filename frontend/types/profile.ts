@@ -175,4 +175,6 @@ export interface ApiProfile {
   location?: string | null;
   time_per_week?: number | null;
   budget?: string | null;
+  profile_meta?: Partial<StudentProfileExtended>;
+  settings_meta?: Record<string, unknown>;
 }

@@ -46,17 +46,17 @@ export default function SettingsPage() {
   const [active, setActive] = useState<SettingsCategory>("account");
   const [settings, setSettings] = useState<AppSettings>(DEFAULT_SETTINGS);
   const theme = useTheme();
-  const { profile: rawProfile } = useProfileContext();
+  const { profile: rawProfile, profileId } = useProfileContext();
   const profile = rawProfile as ApiProfile | null;
 
   useEffect(() => {
-    setSettings(loadAppSettings());
-  }, []);
+    setSettings(loadAppSettings(profileId, profile?.settings_meta ?? null));
+  }, [profileId, profile?.settings_meta]);
 
   const update = (patch: Partial<AppSettings>) => {
     setSettings((prev) => {
       const next = { ...prev, ...patch };
-      saveAppSettings(next);
+      saveAppSettings(profileId, next);
       return next;
     });
   };

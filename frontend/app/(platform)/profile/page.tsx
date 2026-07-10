@@ -3,7 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import { useProfile as useProfileContext } from "@/context/ProfileContext";
 import { getLatestGap, getLatestRoadmap, getInterviewHistory, getPracticeHistory } from "@/lib/api";
-import { loadExtendedProfile, saveExtendedProfile } from "@/lib/profile-store";
+import { mergeExtendedProfile, saveExtendedProfile } from "@/lib/profile-store";
 import type { StudentProfileExtended, ApiProfile } from "@/types/profile";
 import LoadingState from "@/components/ui/LoadingState";
 import { ProfileHero } from "@/components/profile/ProfileHero";
@@ -29,8 +29,7 @@ export default function ProfilePage() {
 
   useEffect(() => {
     if (!profileId) return;
-    const base = loadExtendedProfile(profileId, profile as ApiProfile | null);
-    setExtended(base);
+    setExtended(mergeExtendedProfile(profile as ApiProfile | null));
     setReady(true);
   }, [profileId, profile]);
 

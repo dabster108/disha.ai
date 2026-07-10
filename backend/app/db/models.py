@@ -41,6 +41,8 @@ class StudentProfile(Base):
     location: Mapped[str | None] = mapped_column(String(255))
     time_per_week: Mapped[int | None] = mapped_column(Integer)  # hours available per week
     budget: Mapped[str | None] = mapped_column(String(100))  # e.g. "free", "NPR 5000/month"
+    profile_meta: Mapped[dict] = mapped_column(JSONB, default=dict)  # extended profile sections (projects, portfolio, etc.)
+    settings_meta: Mapped[dict] = mapped_column(JSONB, default=dict)  # per-user app settings
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     user: Mapped[User | None] = relationship(back_populates="profiles")
@@ -60,7 +62,10 @@ class Roadmap(Base):
     weeks: Mapped[list] = mapped_column(JSONB, default=list)
     total_weeks: Mapped[int | None] = mapped_column(Integer)
     summary: Mapped[str | None] = mapped_column(Text)
-    progress: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"completed": [{"week":1,"task_index":0}, ...]}
+    # roadmap.sh-style full skill path: {"schema_version": 1, "summary": ..., "phases": [{"id", "title", "nodes": [...]}]}.
+    # Nullable — legacy roadmaps generated before this feature have weeks only.
+    path: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+    progress: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"completed": [{"week":1,"task_index":0}, ...], "completed_nodes": [...]}
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | completed | replanned
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

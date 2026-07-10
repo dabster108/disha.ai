@@ -10,6 +10,7 @@ The API is shaped so a sandboxed test runner can slot in later.
 
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Literal
 
 from langchain_groq import ChatGroq
@@ -169,6 +170,7 @@ class PracticeSummaryResult(BaseModel):
     summary: str = Field(description="2-3 sentence feedback on the whole session.")
 
 
+@lru_cache
 def _llm() -> ChatGroq:
     settings = get_settings()
     return ChatGroq(model=settings.practice_groq_model, temperature=0.2, api_key=settings.groq_api_key)

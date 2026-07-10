@@ -8,14 +8,14 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 import SessionDurationPicker from "@/components/practice/SessionDurationPicker";
 import { useProfile } from "@/context/ProfileContext";
-import { getInterviewHistory, getProfile, startInterview } from "@/lib/api";
+import { getInterviewHistory, startInterview } from "@/lib/api";
 import {
   INTERVIEW_DURATION_OPTIONS,
   inferInterviewTrack,
   storeInterviewSessionPrefs,
   suggestInterviewDifficulty,
 } from "@/lib/interviewUtils";
-import { storeInterviewWelcome } from "@/hooks/useVoiceInterview";
+import { storeInterviewWelcome, storeInterviewBootstrap } from "@/hooks/useVoiceInterview";
 
 const DIFFICULTY_OPTIONS = ["auto", "easy", "medium", "hard"];
 
@@ -37,21 +37,16 @@ export default function MockInterviewPage() {
   const [starting, setStarting] = useState(false);
   const [durationMinutes, setDurationMinutes] = useState(15);
   const [difficulty, setDifficulty] = useState("auto");
-  const [fullProfile, setFullProfile] = useState(null);
 
-  const inferredTrack = inferInterviewTrack(fullProfile || profile || {});
-  const suggestedDifficulty = suggestInterviewDifficulty(fullProfile || profile || {});
+  const inferredTrack = inferInterviewTrack(profile || {});
+  const suggestedDifficulty = suggestInterviewDifficulty(profile || {});
 
   const load = async () => {
     setLoading(true);
     setError(null);
     try {
-      const [data, profileData] = await Promise.all([
-        getInterviewHistory(profileId),
-        getProfile(profileId),
-      ]);
+      const data = await getInterviewHistory(profileId);
       setSessions(data);
-      setFullProfile(profileData);
     } catch (err) {
       setError(err);
     } finally {
@@ -75,6 +70,12 @@ export default function MockInterviewPage() {
     try {
       const result = await startInterview(profileId);
       storeInterviewWelcome(result.session.id, result.welcome_message);
+      storeInterviewBootstrap(result.session.id, {
+        welcome_message: result.welcome_message,
+        question: result.next_question.question,
+        target_role: result.session.target_role,
+        started_at: result.session.started_at,
+      });
       storeInterviewSessionPrefs(result.session.id, {
         minutes: durationMinutes,
         difficulty: difficulty === "auto" ? suggestedDifficulty : difficulty,
@@ -86,7 +87,7 @@ export default function MockInterviewPage() {
     }
   };
 
-  const displayProfile = fullProfile || profile;
+  const displayProfile = profile;
 
   return (
     <div className="mx-auto max-w-[1400px] px-margin-desktop pb-20 pt-24">
@@ -124,9 +125,8 @@ export default function MockInterviewPage() {
               Start a live voice interview
             </h2>
             <p className="max-w-xl text-body-md text-secondary">
-              DISHA will welcome you and ask questions aloud — tap the mic to answer, tap again to
-              stop. Live captions show what&apos;s being said. Text mode is available if your mic
-              is unavailable.
+              DISHA will ask you questions one at a time — answer naturally by voice or text.
+              You&apos;ll receive a full AI analysis in the chat when the interview ends.
             </p>
           </div>
 

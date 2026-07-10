@@ -8,14 +8,14 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 import Icon from "@/components/ui/Icon";
 import { useProfile } from "@/context/ProfileContext";
-import { getPracticeHistory, startPractice, suggestPracticeSkills, getProfile } from "@/lib/api";
+import { getPracticeHistory, startPractice, suggestPracticeSkills } from "@/lib/api";
 import SessionDurationPicker from "@/components/practice/SessionDurationPicker";
 
 const DIFFICULTIES = ["auto", "easy", "medium", "hard"];
 const MAX_SKILLS = 3;
 
 export default function PracticePage() {
-  const { profileId } = useProfile();
+  const { profileId, profile } = useProfile();
   const router = useRouter();
 
   const [suggested, setSuggested] = useState([]);
@@ -23,7 +23,6 @@ export default function PracticePage() {
   const [selected, setSelected] = useState([]);
   const [difficulty, setDifficulty] = useState("auto");
   const [history, setHistory] = useState([]);
-  const [profile, setProfile] = useState(null);
   const [durationMinutes, setDurationMinutes] = useState(15);
 
   const [loading, setLoading] = useState(true);
@@ -34,16 +33,14 @@ export default function PracticePage() {
     setLoading(true);
     setError(null);
     try {
-      const [suggestion, pastSessions, profileData] = await Promise.all([
+      const [suggestion, pastSessions] = await Promise.all([
         suggestPracticeSkills(profileId),
         getPracticeHistory(profileId),
-        getProfile(profileId),
       ]);
       setSuggested(suggestion.suggested_skills);
       setTrack(suggestion.track);
       setSelected(suggestion.suggested_skills.slice(0, MAX_SKILLS));
       setHistory(pastSessions);
-      setProfile(profileData);
     } catch (err) {
       setError(err);
     } finally {
@@ -171,9 +168,8 @@ export default function PracticePage() {
             </div>
           )}
 
-          <p className="mb-6 flex items-center gap-2 text-sm font-semibold text-tertiary">
-            <Icon name="mic" size={18} />
-            Microphone required for scenario questions — text fallback available
+          <p className="mb-6 text-sm font-semibold text-secondary">
+            Text-based challenges — write code or typed responses. No microphone needed.
           </p>
 
           <button

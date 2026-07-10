@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from typing import Literal
 
 from langchain_mistralai import ChatMistralAI
@@ -38,12 +39,12 @@ TECH_SKILL_HINTS = {
     "pandas",
     "tensorflow",
 }
-MAX_QUESTION_TURNS = 4
+MAX_QUESTION_TURNS = 15
 
 
 class AnswerEvaluation(BaseModel):
     score: float = Field(ge=0, le=10)
-    feedback: str = Field(description="Short actionable feedback for the student.")
+    feedback: str = Field(description="One-sentence internal note — not shown to candidate mid-interview.")
     dimensions: dict[str, float] = Field(
         default_factory=dict,
         description="Named scoring dimensions such as clarity, accuracy, depth, and relevance on a 0-10 scale.",
@@ -62,11 +63,40 @@ class NextQuestion(BaseModel):
     rationale: str = Field(description="Internal reason for the next question choice.")
 
 
+class EvaluationWithNext(BaseModel):
+    """Combined result: evaluate the current answer AND pick the next question in one call.
+
+    Flat fields (rather than a nested NextQuestion) keep structured output
+    reliable and the response small — cutting per-turn latency versus running
+    evaluation and next-question generation as two sequential LLM round trips.
+    """
+
+    score: float = Field(ge=0, le=10)
+    feedback: str = Field(description="One-sentence internal note — not shown to candidate mid-interview.")
+    answer_quality: Literal["poor", "average", "good", "excellent"]
+    suggested_difficulty: Literal["easy", "medium", "hard"]
+    strengths: list[str] = Field(default_factory=list)
+    weaknesses: list[str] = Field(default_factory=list)
+    next_question: str = Field(description="The next interview question to ask.")
+    next_question_type: Literal["technical", "conceptual", "scenario", "behavioral"]
+    next_question_skill_tag: str | None = None
+    next_question_difficulty: Literal["easy", "medium", "hard"]
+
+
 class InterviewSummary(BaseModel):
     overall_score: float = Field(ge=0, le=10)
     summary: str
     strengths: list[str] = Field(default_factory=list)
     weaknesses: list[str] = Field(default_factory=list)
+    communication_style: str = Field(
+        description="How the candidate communicates: confidence, hesitation, filler words, pacing, clarity."
+    )
+    answer_authenticity: str = Field(
+        description="Whether answers sound genuine, memorized, generic, or likely AI-generated."
+    )
+    how_to_answer_better: str = Field(
+        description="Concrete advice on how to structure and deliver stronger interview answers."
+    )
 
 
 def detect_track(profile: StudentProfile) -> Literal["tech", "nontech"]:
@@ -96,9 +126,9 @@ def build_welcome_message(profile: StudentProfile, track: str, difficulty: str) 
     name = profile.full_name or "there"
     track_label = "technical" if track == "tech" else "role-specific"
     return (
-        f"Welcome {name}! We’ll run a short adaptive {track_label} interview for the "
-        f"`{profile.target_role}` role. I’ll start at `{difficulty}` difficulty, ask one "
-        "question at a time, and adapt based on your answers and profile."
+        f"Welcome {name}! We'll run a short {track_label} interview for the "
+        f"`{profile.target_role}` role. I'll ask you a few questions one at a time — "
+        "answer naturally, and you'll get a full analysis at the end."
     )
 
 
@@ -236,44 +266,35 @@ def build_profile_context(profile: StudentProfile) -> str:
     )
 
 
-def build_turn_context(turns: list[InterviewTurn]) -> str:
+def build_turn_context(turns: list[InterviewTurn], *, include_feedback: bool = False) -> str:
+    """Compact transcript of prior turns.
+
+    Feedback text is omitted by default — it roughly doubles the token count of
+    the context while adding little signal for choosing the next question, so we
+    keep prompts small to reduce Mistral latency.
+    """
     if not turns:
         return "No previous turns."
 
     parts: list[str] = []
     for turn in turns:
-        parts.append(
-            "\n".join(
-                [
-                    f"Turn {turn.turn_index}",
-                    f"Question type: {turn.question_type}",
-                    f"Question: {turn.question}",
-                    f"Answer: {turn.answer or 'N/A'}",
-                    f"Score: {turn.score if turn.score is not None else 'N/A'}",
-                    f"Feedback: {turn.feedback or 'N/A'}",
-                ]
-            )
-        )
+        lines = [
+            f"Turn {turn.turn_index} ({turn.question_type})",
+            f"Q: {turn.question}",
+            f"A: {turn.answer or 'N/A'}",
+        ]
+        if turn.score is not None:
+            lines.append(f"Score: {turn.score}")
+        if include_feedback and turn.feedback:
+            lines.append(f"Feedback: {turn.feedback}")
+        parts.append("\n".join(lines))
     return "\n\n".join(parts)
 
 
+@lru_cache
 def _llm() -> ChatMistralAI:
     settings = get_settings()
     return ChatMistralAI(model=settings.interview_mistral_model, temperature=0.2, api_key=settings.mistral_api_key2)
-
-
-async def generate_opening_question(profile: StudentProfile, track: str, difficulty: str) -> NextQuestion:
-    prompt = (
-        "You are generating the first interview question for an adaptive mock interview.\n"
-        "Return exactly one opening question.\n"
-        "Keep it concise, professional, and role-specific.\n"
-        "The first question must be a background question, not a coding exercise.\n\n"
-        f"Track: {track}\n"
-        f"Difficulty: {difficulty}\n"
-        f"Candidate profile:\n{build_profile_context(profile)}"
-    )
-    result = await call_structured(_llm(), NextQuestion, prompt)
-    return result if result is not None else fallback_opening_question(profile, difficulty)
 
 
 async def evaluate_answer(
@@ -285,7 +306,8 @@ async def evaluate_answer(
 ) -> AnswerEvaluation:
     prompt = (
         "You are evaluating one answer from a short adaptive interview.\n"
-        "Score the answer from 0 to 10.\n"
+        "Score the answer from 0 to 10 for internal tracking only — feedback is NOT shown to the candidate mid-interview.\n"
+        "Keep feedback to one short internal note (one sentence max).\n"
         "Be strict but fair.\n"
         "Use the candidate's profile and the exact question context.\n"
         "Set suggested_difficulty based on the demonstrated answer quality.\n\n"
@@ -300,30 +322,63 @@ async def evaluate_answer(
     return result if result is not None else fallback_evaluation(answer, current_turn.difficulty)
 
 
-async def generate_next_question(
+async def evaluate_with_next_question(
     profile: StudentProfile,
     session: InterviewSession,
-    turns: list[InterviewTurn],
-    evaluation: AnswerEvaluation,
-) -> NextQuestion:
-    current_turn = turns[-1]
+    current_turn: InterviewTurn,
+    answer: str,
+    previous_turns: list[InterviewTurn],
+) -> tuple[AnswerEvaluation, NextQuestion]:
+    """Evaluate the answer and choose the next question in a single LLM call.
+
+    Falls back to deterministic templates (no extra network call) if the model
+    fails, so a flaky response never blocks the interview.
+    """
     next_turn_index = current_turn.turn_index + 1
-    prompt = (
-        "You are generating the next interview question for a short adaptive mock interview.\n"
-        "The next question must depend on the candidate's profile, target role, claimed skills, and the quality of the previous answer.\n"
-        "Do not ask for code execution.\n"
-        "Ask one concise question only.\n"
-        "For technical tracks, use technical or conceptual questions after the opening.\n"
-        "For non-technical tracks, use scenario or behavioral questions after the opening.\n\n"
-        f"Session track: {session.track}\n"
-        f"Current session difficulty: {session.difficulty}\n"
-        f"Next turn index: {next_turn_index}\n"
-        f"Latest evaluation: {evaluation.model_dump_json()}\n\n"
-        f"Candidate profile:\n{build_profile_context(profile)}\n\n"
-        f"Interview so far:\n{build_turn_context(turns)}"
+    q_guidance = (
+        "For technical tracks use a technical or conceptual question; "
+        "for non-technical tracks use a scenario or behavioral question."
     )
-    result = await call_structured(_llm(), NextQuestion, prompt)
-    return result if result is not None else fallback_next_question(profile, session.track, next_turn_index, evaluation)
+    prompt = (
+        "You are running one turn of a short adaptive mock interview.\n"
+        "Do two things in a single response:\n"
+        "1. Evaluate the candidate's answer internally (score 0-10, one-sentence internal note only — NOT shown to candidate yet).\n"
+        "2. Choose the next question based on the profile, target role, and the answer quality.\n"
+        f"{q_guidance}\n"
+        "Ask one concise question only. Do not ask for code execution.\n"
+        "Set suggested_difficulty and next_question.difficulty from the demonstrated quality.\n"
+        "Do NOT include scores, critique, or coaching in next_question — just ask the next question naturally.\n\n"
+        f"Track: {session.track}\n"
+        f"Current difficulty: {session.difficulty}\n"
+        f"Next turn index: {next_turn_index}\n"
+        f"Candidate profile:\n{build_profile_context(profile)}\n\n"
+        f"Previous turns:\n{build_turn_context(previous_turns)}\n\n"
+        f"Current question:\n{current_turn.question}\n\n"
+        f"Candidate answer:\n{answer}"
+    )
+    result = await call_structured(_llm(), EvaluationWithNext, prompt)
+    if result is not None:
+        evaluation = AnswerEvaluation(
+            score=result.score,
+            feedback=result.feedback,
+            dimensions={},
+            answer_quality=result.answer_quality,
+            suggested_difficulty=result.suggested_difficulty,
+            strengths=result.strengths,
+            weaknesses=result.weaknesses,
+        )
+        next_question = NextQuestion(
+            question=result.next_question,
+            question_type=result.next_question_type,
+            skill_tag=result.next_question_skill_tag,
+            difficulty=result.next_question_difficulty,
+            rationale="",
+        )
+        return evaluation, next_question
+
+    evaluation = fallback_evaluation(answer, current_turn.difficulty)
+    next_question = fallback_next_question(profile, session.track, next_turn_index, evaluation)
+    return evaluation, next_question
 
 
 async def summarize_session(
@@ -332,13 +387,24 @@ async def summarize_session(
     turns: list[InterviewTurn],
 ) -> InterviewSummary:
     prompt = (
-        "You are writing the final result for a short adaptive interview.\n"
-        "Use all answered turns to produce an overall score, a concise summary, strengths, and weaknesses.\n"
-        "The result should help the student understand what to improve next.\n\n"
+        "You are writing the final comprehensive analysis for a completed mock interview.\n"
+        "The candidate did NOT see per-question feedback during the interview — this is their first full review.\n"
+        "Use all answered turns to produce:\n"
+        "- overall_score (0-10)\n"
+        "- summary: 2-3 sentence overall verdict\n"
+        "- strengths and weaknesses (specific, actionable lists)\n"
+        "- communication_style: how they communicate — note hesitation, stopping mid-answer, filler words, "
+        "confidence level, structure, and whether they ramble or stay concise\n"
+        "- answer_authenticity: assess whether answers sound genuine and personal vs generic, memorized, "
+        "or likely AI-generated (watch for overly polished generic phrasing, lack of personal examples, "
+        "buzzword-heavy responses with no specifics)\n"
+        "- how_to_answer_better: concrete coaching on how to answer interview questions more effectively "
+        "for this role — structure (STAR method etc.), specificity, authenticity\n"
+        "Be direct and helpful, not harsh.\n\n"
         f"Session track: {session.track}\n"
         f"Session target role: {session.target_role}\n"
         f"Candidate profile:\n{build_profile_context(profile)}\n\n"
-        f"Interview transcript:\n{build_turn_context(turns)}"
+        f"Interview transcript:\n{build_turn_context(turns, include_feedback=True)}"
     )
     result = await call_structured(_llm(), InterviewSummary, prompt)
     if result is not None:
@@ -349,9 +415,38 @@ async def summarize_session(
     return InterviewSummary(
         overall_score=overall,
         summary=(
-            f"You completed an adaptive interview for the {profile.target_role} role. "
-            "Keep improving answer depth, structure, and role-specific examples."
+            f"You completed a mock interview for the {profile.target_role} role. "
+            "Review the detailed breakdown below to improve your next attempt."
         ),
         strengths=["Stayed relevant to the role"] if overall >= 5 else [],
         weaknesses=["Needs more concrete examples and clearer explanation"],
+        communication_style="Work on structuring answers with a clear beginning, example, and takeaway.",
+        answer_authenticity="Use personal stories and specific details so answers sound genuine, not generic.",
+        how_to_answer_better=(
+            "Lead with a direct answer, support with one real example from your experience, "
+            "and end with what you learned or achieved."
+        ),
     )
+
+
+def format_session_summary_text(summary: InterviewSummary) -> str:
+    """Flatten structured summary into one report string stored on the session."""
+    sections = [
+        f"Overall score: {summary.overall_score}/10",
+        "",
+        summary.summary,
+        "",
+        "How you communicate",
+        summary.communication_style,
+        "",
+        "Answer authenticity",
+        summary.answer_authenticity,
+        "",
+        "How to answer better",
+        summary.how_to_answer_better,
+    ]
+    if summary.strengths:
+        sections.extend(["", "Strengths", *[f"• {s}" for s in summary.strengths]])
+    if summary.weaknesses:
+        sections.extend(["", "Areas to improve", *[f"• {w}" for w in summary.weaknesses]])
+    return "\n".join(sections)

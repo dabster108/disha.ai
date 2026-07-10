@@ -37,7 +37,37 @@ class ProfileOut(ProfileCreate):
     model_config = ConfigDict(from_attributes=True)
 
     id: uuid.UUID
+    profile_meta: dict = Field(default_factory=dict)
+    settings_meta: dict = Field(default_factory=dict)
     created_at: datetime
+
+
+class ProfilePatch(BaseModel):
+    full_name: str | None = None
+    email: str | None = None
+    phone: str | None = None
+    summary: str | None = None
+    years_of_experience: float | None = Field(None, ge=0, le=50)
+    education: list[EducationEntry] | None = None
+    experience: list[ExperienceEntry] | None = None
+    skills: list[str] | None = Field(None, min_length=1)
+    skills_source: Literal["manual", "cv"] | None = None
+    target_role: str | None = Field(None, min_length=2, max_length=255)
+    location: str | None = None
+    time_per_week: int | None = Field(None, ge=1, le=100)
+    budget: str | None = None
+    profile_meta: dict | None = None
+    settings_meta: dict | None = None
+
+
+def _deep_merge(base: dict, patch: dict) -> dict:
+    merged = dict(base)
+    for key, value in patch.items():
+        if isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
 
 
 class ResumeParseResult(BaseModel):
@@ -74,6 +104,39 @@ async def get_profile(student_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     profile = await db.get(StudentProfile, student_id)
     if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
+    return profile
+
+
+@router.patch("/{student_id}", response_model=ProfileOut)
+async def update_profile(
+    student_id: uuid.UUID,
+    payload: ProfilePatch,
+    db: AsyncSession = Depends(get_db),
+) -> StudentProfile:
+    profile = await db.get(StudentProfile, student_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    data = payload.model_dump(exclude_unset=True)
+
+    if "education" in data and data["education"] is not None:
+        data["education"] = [entry.model_dump() for entry in payload.education or []]
+    if "experience" in data and data["experience"] is not None:
+        data["experience"] = [entry.model_dump() for entry in payload.experience or []]
+
+    profile_meta = data.pop("profile_meta", None)
+    settings_meta = data.pop("settings_meta", None)
+
+    for field, value in data.items():
+        setattr(profile, field, value)
+
+    if profile_meta is not None:
+        profile.profile_meta = _deep_merge(profile.profile_meta or {}, profile_meta)
+    if settings_meta is not None:
+        profile.settings_meta = _deep_merge(profile.settings_meta or {}, settings_meta)
+
+    await db.commit()
+    await db.refresh(profile)
     return profile
 
 

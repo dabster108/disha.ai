@@ -3,9 +3,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const MAX_RECORDING_MS = 3 * 60 * 1000;
-const SILENCE_THRESHOLD = 0.032;
-const SILENCE_DURATION_MS = 1400;
-const MIN_SPEECH_MS = 700;
+const SILENCE_THRESHOLD = 0.028;
+const SILENCE_DURATION_MS = 1200;
+const MIN_SPEECH_MS = 500;
+// Throttle volume state updates so the waveform stays smooth without forcing a
+// React re-render on every animation frame (~60fps → ~15fps).
+const VOLUME_UPDATE_INTERVAL_MS = 66;
 
 /**
  * Microphone capture via MediaRecorder (audio/webm).
@@ -30,6 +33,8 @@ export function useAudioRecorder() {
   const speechDetectedRef = useRef(false);
   const lastLoudAtRef = useRef(0);
   const autoStoppingRef = useRef(false);
+  const autoStopFiredRef = useRef(false);
+  const lastVolumeAtRef = useRef(0);
 
   const stopTracks = useCallback(() => {
     streamRef.current?.getTracks().forEach((t) => t.stop());
@@ -54,24 +59,34 @@ export function useAudioRecorder() {
       analyser.getByteFrequencyData(data);
       const avg = data.reduce((s, v) => s + v, 0) / data.length;
       const vol = avg / 255;
-      setVolume(vol);
+
+      const now = Date.now();
+      if (now - lastVolumeAtRef.current >= VOLUME_UPDATE_INTERVAL_MS) {
+        lastVolumeAtRef.current = now;
+        setVolume(vol);
+      }
 
       if (recorderRef.current?.state === "recording" && !autoStoppingRef.current) {
-        const elapsed = Date.now() - startTimeRef.current;
+        const elapsed = now - startTimeRef.current;
         if (vol > SILENCE_THRESHOLD) {
           if (!speechDetectedRef.current) {
             speechDetectedRef.current = true;
             setSpeechDetected(true);
           }
-          lastLoudAtRef.current = Date.now();
+          lastLoudAtRef.current = now;
         } else if (
           speechDetectedRef.current &&
           elapsed >= MIN_SPEECH_MS &&
-          Date.now() - lastLoudAtRef.current >= SILENCE_DURATION_MS
+          now - lastLoudAtRef.current >= SILENCE_DURATION_MS
         ) {
           autoStoppingRef.current = true;
           recorderRef.current.stop();
-          onAutoStopRef.current?.();
+          // Guard: the auto-stop callback must fire at most once per cycle so a
+          // silence stop and a manual stop can never submit the same take twice.
+          if (!autoStopFiredRef.current) {
+            autoStopFiredRef.current = true;
+            onAutoStopRef.current?.();
+          }
           return;
         }
       }
@@ -117,6 +132,8 @@ export function useAudioRecorder() {
       speechDetectedRef.current = false;
       setSpeechDetected(false);
       autoStoppingRef.current = false;
+      autoStopFiredRef.current = false;
+      lastVolumeAtRef.current = 0;
       lastLoudAtRef.current = Date.now();
 
       const stream = await ensureStream();
@@ -153,7 +170,10 @@ export function useAudioRecorder() {
         setDurationMs(elapsed);
         if (elapsed >= MAX_RECORDING_MS) {
           recorder.stop();
-          onAutoStopRef.current?.();
+          if (!autoStopFiredRef.current) {
+            autoStopFiredRef.current = true;
+            onAutoStopRef.current?.();
+          }
         }
       }, 200);
 
@@ -168,6 +188,11 @@ export function useAudioRecorder() {
     }
     return blobPromiseRef.current;
   }, []);
+
+  const isRecordingActive = useCallback(
+    () => recorderRef.current?.state === "recording",
+    []
+  );
 
   const cleanup = useCallback(() => {
     if (recorderRef.current?.state === "recording") {
@@ -192,6 +217,7 @@ export function useAudioRecorder() {
     warningAtMs: 2.5 * 60 * 1000,
     startRecording,
     stopRecording,
+    isRecordingActive,
     cleanup,
     clearError: () => setError(null),
   };

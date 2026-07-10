@@ -1,6 +1,7 @@
 import type { AppSettings } from "@/types/settings";
+import { updateProfile } from "@/lib/api";
 
-const STORAGE_KEY = "disha-app-settings";
+const STORAGE_PREFIX = "disha-app-settings-";
 
 const DEFAULT_SETTINGS: AppSettings = {
   notifications: {
@@ -36,11 +37,11 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
   connectedAccounts: [
     { id: "google", provider: "Google", connected: false },
-    { id: "github", provider: "GitHub", connected: true, email: "pratik@github.com", connectedAt: "2024-03-12" },
+    { id: "github", provider: "GitHub", connected: false },
     { id: "linkedin", provider: "LinkedIn", connected: false },
     { id: "microsoft", provider: "Microsoft", connected: false },
     { id: "apple", provider: "Apple", connected: false },
-    { id: "leetcode", provider: "LeetCode", connected: true, connectedAt: "2024-05-01" },
+    { id: "leetcode", provider: "LeetCode", connected: false },
     { id: "kaggle", provider: "Kaggle", connected: false },
   ],
   billing: {
@@ -50,20 +51,47 @@ const DEFAULT_SETTINGS: AppSettings = {
   },
 };
 
-export function loadAppSettings(): AppSettings {
-  if (typeof window === "undefined") return DEFAULT_SETTINGS;
-  try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
-  } catch {
-    return DEFAULT_SETTINGS;
+function deepMerge<T extends object>(base: T, patch: Partial<T>): T {
+  const merged = { ...base };
+  for (const key of Object.keys(patch) as (keyof T)[]) {
+    const value = patch[key];
+    if (value && typeof value === "object" && !Array.isArray(value) && typeof merged[key] === "object") {
+      merged[key] = deepMerge(merged[key] as object, value as object) as T[keyof T];
+    } else if (value !== undefined) {
+      merged[key] = value as T[keyof T];
+    }
   }
+  return merged;
 }
 
-export function saveAppSettings(settings: AppSettings) {
-  if (typeof window !== "undefined") {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
+export function loadAppSettings(profileId?: string | null, apiMeta?: Record<string, unknown> | null): AppSettings {
+  const fromApi =
+    apiMeta && Object.keys(apiMeta).length > 0 ? (apiMeta as Partial<AppSettings>) : null;
+  let base = fromApi ? deepMerge(DEFAULT_SETTINGS, fromApi) : DEFAULT_SETTINGS;
+
+  if (profileId && typeof window !== "undefined") {
+    try {
+      const raw = localStorage.getItem(`${STORAGE_PREFIX}${profileId}`);
+      if (raw) base = deepMerge(base, JSON.parse(raw));
+    } catch {
+      /* ignore */
+    }
   }
+  return base;
+}
+
+let settingsTimer: ReturnType<typeof setTimeout> | null = null;
+
+export function saveAppSettings(profileId: string | null, settings: AppSettings) {
+  if (profileId && typeof window !== "undefined") {
+    localStorage.setItem(`${STORAGE_PREFIX}${profileId}`, JSON.stringify(settings));
+  }
+  if (!profileId) return;
+
+  if (settingsTimer) clearTimeout(settingsTimer);
+  settingsTimer = setTimeout(() => {
+    updateProfile(profileId, { settings_meta: settings }).catch(() => {});
+  }, 500);
 }
 
 export { DEFAULT_SETTINGS };
