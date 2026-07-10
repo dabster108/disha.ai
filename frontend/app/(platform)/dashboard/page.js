@@ -187,21 +187,48 @@ export default function DashboardPage() {
             </p>
           ) : (
             <div className="grid grid-cols-1 gap-6 md:grid-cols-2">
-              {gapData.sample_jobs.map((job, i) => (
+              {gapData.sample_jobs.slice(0, 4).map((job, i) => (
                 <a
                   key={`${job.title}-${job.company}-${i}`}
                   href={job.source_url}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="card-hover flex items-center justify-between rounded-2xl border border-outline-variant bg-white p-6 transition-all"
+                  className="card-hover flex flex-col gap-4 rounded-2xl border border-outline-variant bg-white p-6 transition-all"
                 >
-                  <div>
-                    <h4 className="text-headline-md font-bold">{job.title}</h4>
-                    <p className="text-body-md text-secondary">{job.company}</p>
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <h4 className="truncate text-headline-md font-bold">{job.title}</h4>
+                      <p className="text-body-md text-secondary">{job.company}</p>
+                      {job.location && (
+                        <p className="mt-1 flex items-center gap-1 text-sm text-secondary">
+                          <Icon name="location_on" size={14} />
+                          {job.location}
+                        </p>
+                      )}
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <span className="rounded-full bg-primary/10 px-4 py-1.5 text-label-md font-bold text-primary">
+                        {job.match_score ?? Math.round(job.similarity * 100)}%
+                      </span>
+                      {job.match_label && (
+                        <p className="mt-1 text-xs font-bold uppercase tracking-wider text-secondary">
+                          {job.match_label}
+                        </p>
+                      )}
+                    </div>
                   </div>
-                  <span className="rounded-full bg-primary/10 px-4 py-1.5 text-label-md font-bold text-primary">
-                    {job.match_score ?? Math.round(job.similarity * 100)}% match
-                  </span>
+                  {job.matched_skills?.length > 0 && (
+                    <div className="flex flex-wrap gap-2">
+                      {job.matched_skills.slice(0, 4).map((skill) => (
+                        <span
+                          key={skill}
+                          className="rounded-full bg-primary/5 px-3 py-1 text-xs font-medium text-primary"
+                        >
+                          {skill}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </a>
               ))}
             </div>

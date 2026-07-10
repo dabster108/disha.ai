@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.config import get_settings
 from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
+from app.services.learning_resources import attach_resources_to_weeks
 from app.services.roadmap import classify_gap_size, generate_roadmap
 from app.services.skill_gap import compute_combined_skill_gap, load_gap_context
 
@@ -34,6 +35,7 @@ class RoadmapRequest(BaseModel):
 class RoadmapProgressRequest(BaseModel):
     week: int
     task_index: int
+    resource_index: int | None = None
     completed: bool = True
 
 
@@ -50,6 +52,15 @@ class RoadmapOut(BaseModel):
     progress: dict
     status: str
     created_at: datetime
+
+
+def _task_resource_count(weeks: list, week: int, task_index: int) -> int:
+    for w in weeks or []:
+        if w.get("week") == week:
+            tasks = w.get("tasks") or []
+            if 0 <= task_index < len(tasks):
+                return len(tasks[task_index].get("resources") or [])
+    return 0
 
 
 async def _get_or_create_snapshot(db: AsyncSession, profile: StudentProfile) -> SkillGapSnapshot:
@@ -133,6 +144,16 @@ async def latest_roadmap(profile_id: uuid.UUID, db: AsyncSession = Depends(get_d
     roadmap = result.scalar_one_or_none()
     if roadmap is None:
         raise HTTPException(status_code=404, detail="No roadmap yet — POST /api/roadmap first.")
+
+    # Backfill real learning links onto roadmaps generated before resources
+    # existed, so the UI always has clickable cards. Persist once.
+    profile = await db.get(StudentProfile, profile_id)
+    budget = profile.budget if profile else "free"
+    weeks = list(roadmap.weeks or [])
+    if attach_resources_to_weeks(weeks, budget=budget):
+        roadmap.weeks = weeks
+        await db.commit()
+        await db.refresh(roadmap)
     return roadmap
 
 
@@ -150,14 +171,37 @@ async def update_roadmap_progress(
     if roadmap is None:
         raise HTTPException(status_code=404, detail="No active roadmap for this profile")
 
-    completed = list(roadmap.progress.get("completed", []))
-    entry = {"week": payload.week, "task_index": payload.task_index}
-    already_done = any(e == entry for e in completed)
-    if payload.completed and not already_done:
-        completed.append(entry)
-    elif not payload.completed and already_done:
-        completed = [e for e in completed if e != entry]
+    progress = dict(roadmap.progress or {})
+    completed = list(progress.get("completed", []))
+    resources_done = list(progress.get("resources_completed", []))
 
-    roadmap.progress = {"completed": completed}
+    task_entry = {"week": payload.week, "task_index": payload.task_index}
+
+    def _set(items: list[dict], entry: dict, on: bool) -> list[dict]:
+        exists = any(e == entry for e in items)
+        if on and not exists:
+            items = [*items, entry]
+        elif not on and exists:
+            items = [e for e in items if e != entry]
+        return items
+
+    if payload.resource_index is None:
+        # Task-level toggle (task with no resources, or "mark whole task done").
+        completed = _set(completed, task_entry, payload.completed)
+    else:
+        # Resource-level toggle — then derive task completion from its resources.
+        res_entry = {**task_entry, "resource_index": payload.resource_index}
+        resources_done = _set(resources_done, res_entry, payload.completed)
+
+        total_resources = _task_resource_count(roadmap.weeks, payload.week, payload.task_index)
+        done_for_task = sum(
+            1
+            for e in resources_done
+            if e.get("week") == payload.week and e.get("task_index") == payload.task_index
+        )
+        task_complete = total_resources > 0 and done_for_task >= total_resources
+        completed = _set(completed, task_entry, task_complete)
+
+    roadmap.progress = {"completed": completed, "resources_completed": resources_done}
     await db.commit()
     return roadmap

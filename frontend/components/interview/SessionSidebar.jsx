@@ -6,16 +6,17 @@ import Icon from "@/components/ui/Icon";
 const STATE_LABELS = {
   loading: "Connecting to interview…",
   disha_speaking: "DISHA is speaking…",
-  listening: "Your turn — tap mic to answer",
-  recording: "Recording your answer…",
+  listening: "Speak your answer — auto-detects when you pause",
+  recording: "Recording — pauses ~1.5s after you stop speaking",
   transcribing: "Processing your answer…",
   evaluating: "DISHA is analyzing…",
   feedback: "Feedback ready",
+  session_timeout: "Time's up!",
   completed: "Interview complete",
 };
 
 function formatElapsed(ms) {
-  const total = Math.floor(ms / 1000);
+  const total = Math.max(0, Math.floor(ms / 1000));
   const m = Math.floor(total / 60);
   const s = total % 60;
   return `${m}:${String(s).padStart(2, "0")}`;
@@ -47,44 +48,79 @@ export default function SessionSidebar({
   showRecordingWarning,
   isPractice = false,
   sessionRemainingMs,
+  questionRemainingMs,
   challengeRemainingMs,
+  showCountdown = false,
 }) {
+  const questionMs = questionRemainingMs ?? challengeRemainingMs;
   const [elapsed, setElapsed] = useState(0);
 
   useEffect(() => {
-    if (!sessionStartTime || isPractice) return;
+    if (!sessionStartTime || showCountdown) return;
     const tick = () => setElapsed(Date.now() - sessionStartTime);
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [sessionStartTime, isPractice]);
+  }, [sessionStartTime, showCountdown]);
 
   const statusLabel = isPractice
     ? (PRACTICE_STATE_LABELS[sessionState] || STATE_LABELS[sessionState] || sessionState)
     : (STATE_LABELS[sessionState] || sessionState);
 
-  const isSessionWarning = isPractice && sessionRemainingMs <= 60000 && sessionRemainingMs > 0;
+  const useCountdown = showCountdown && sessionRemainingMs !== undefined;
+  const isSessionWarning = useCountdown && sessionRemainingMs <= 60000 && sessionRemainingMs > 0;
+  const isQuestionWarning =
+    questionMs !== undefined && questionMs <= 30000 && questionMs > 0;
 
   return (
     <aside className="flex h-full flex-col gap-5 rounded-2xl border border-outline-variant bg-surface-container-lowest p-5">
       <div>
         <span className="text-label-sm uppercase tracking-widest text-secondary">
-          {isPractice ? "Session Time Left" : "Session"}
+          {useCountdown ? "Session time left" : "Session"}
         </span>
-        <p className={`mt-1 font-mono text-headline-md ${isSessionWarning ? "text-error font-bold animate-pulse" : "text-on-surface"}`}>
-          {isPractice && sessionRemainingMs !== undefined ? formatElapsed(sessionRemainingMs) : formatElapsed(elapsed)}
+        <p
+          className={`mt-1 font-mono text-headline-md ${
+            isSessionWarning ? "animate-pulse font-bold text-error" : "text-on-surface"
+          }`}
+        >
+          {useCountdown ? formatElapsed(sessionRemainingMs) : formatElapsed(elapsed)}
         </p>
         {isSessionWarning && (
-          <p className="text-xs text-error font-bold mt-1">1 minute left — wrap up practice!</p>
+          <p className="mt-1 text-xs font-bold text-error">1 minute left — wrap up soon!</p>
         )}
       </div>
 
+      {questionMs !== undefined && (
+        <div className="rounded-xl border border-outline-variant/50 bg-white p-4">
+          <span className="mb-1 block text-label-sm uppercase tracking-widest text-secondary">
+            {isPractice ? "Challenge time left" : "Question time left"}
+          </span>
+          <p
+            className={`font-mono text-headline-md ${
+              isQuestionWarning ? "animate-pulse font-bold text-error" : "text-on-surface"
+            }`}
+          >
+            {formatElapsed(questionMs)}
+          </p>
+        </div>
+      )}
+
       <div className="rounded-xl border border-outline-variant/50 bg-white p-4">
         <div className="mb-2 flex items-center gap-2">
-          {(sessionState === "listening" || sessionState === "recording" || sessionState === "coding") && (
+          {(sessionState === "listening" ||
+            sessionState === "recording" ||
+            sessionState === "coding") && (
             <span className="relative flex h-2.5 w-2.5">
-              <span className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${sessionState === "coding" ? "bg-primary" : "bg-error"}`} />
-              <span className={`relative inline-flex h-2.5 w-2.5 rounded-full ${sessionState === "coding" ? "bg-primary" : "bg-error"}`} />
+              <span
+                className={`absolute inline-flex h-full w-full animate-ping rounded-full opacity-75 ${
+                  sessionState === "coding" ? "bg-primary" : "bg-error"
+                }`}
+              />
+              <span
+                className={`relative inline-flex h-2.5 w-2.5 rounded-full ${
+                  sessionState === "coding" ? "bg-primary" : "bg-error"
+                }`}
+              />
             </span>
           )}
           {sessionState === "evaluating" && (
@@ -97,14 +133,6 @@ export default function SessionSidebar({
         )}
       </div>
 
-      {isPractice && challengeRemainingMs !== undefined && (
-        <div className="rounded-xl border border-outline-variant/50 bg-white p-4">
-          <span className="text-label-sm uppercase tracking-widest text-secondary block mb-1">Challenge Time Left</span>
-          <p className={`font-mono text-headline-md ${challengeRemainingMs <= 30000 && challengeRemainingMs > 0 ? "text-error animate-pulse font-bold" : "text-on-surface"}`}>
-            {formatElapsed(challengeRemainingMs)}
-          </p>
-        </div>
-      )}
 
       {currentTurnIndex != null && (
         <div>
@@ -112,7 +140,8 @@ export default function SessionSidebar({
             {isPractice ? "Challenge" : "Turn"}
           </span>
           <p className="text-body-md text-on-surface">
-            {isPractice ? `Challenge ${currentTurnIndex}` : `Question ${currentTurnIndex}`} • {track === "tech" ? "Technical" : "Role"} • {difficulty}
+            {isPractice ? `Challenge ${currentTurnIndex}` : `Question ${currentTurnIndex}`} •{" "}
+            {track === "tech" ? "Technical" : "Role"} • {difficulty}
           </p>
         </div>
       )}

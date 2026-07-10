@@ -50,7 +50,7 @@ export default function MicButton({
       }`}
     >
       <Icon name={isRecording ? "stop_circle" : "mic"} size={22} filled={isRecording} />
-      {isRecording ? "Tap to Stop" : "Tap to Answer"}
+      {isRecording ? "Finish answer" : "Restart mic"}
     </button>
   );
 }

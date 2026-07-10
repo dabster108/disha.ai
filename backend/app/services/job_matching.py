@@ -447,20 +447,61 @@ def score_job(job: dict, ctx: GapContext) -> dict:
     }
 
 
-def rank_jobs_for_student(ctx: GapContext, *, n: int | None = None) -> list[dict]:
-    """Retrieve candidates then rank with multi-factor scoring."""
+def rank_jobs_for_student(
+    ctx: GapContext,
+    *,
+    n: int | None = None,
+    prefetched: list[dict] | None = None,
+) -> list[dict]:
+    """Retrieve candidates then rank with multi-factor scoring.
+
+    ``prefetched`` lets a caller (e.g. the combined skill-gap agent) supply an
+    already-retrieved candidate pool so we run Chroma exactly once per report
+    instead of searching again here.
+    """
     settings = get_settings()
     max_results = n if n is not None else settings.job_match_max_results
     fetch_n = max(max_results * settings.job_search_overfetch, 30)
 
-    candidates = search_jobs(
-        ctx.profile.target_role,
-        n=fetch_n,
-        min_similarity=settings.job_match_retrieval_min_similarity,
-    )
+    if prefetched is not None:
+        candidates = prefetched
+    else:
+        candidates = search_jobs(
+            ctx.profile.target_role,
+            n=fetch_n,
+            min_similarity=settings.job_match_retrieval_min_similarity,
+        )
 
     scored = [score_job(job, ctx) for job in candidates]
     qualified = [row for row in scored if row["passes_thresholds"]]
     qualified.sort(key=lambda row: (row["composite_score"], row["match_score"]), reverse=True)
+
+    if not qualified and scored:
+        # Relaxed fallback — only surface jobs that are genuinely relevant to the
+        # target role. Relevance requires a REAL skill overlap or a same-domain
+        # match. This deliberately excludes unrelated postings (e.g. Chef, F&B,
+        # Instructor) that only get the neutral 0.50 skills prior for having no
+        # listed skills, plus loose "engineer" domain false positives (0.45).
+        relaxed = [
+            row
+            for row in scored
+            if row["factors"]["role_similarity"] >= 0.35
+            and (
+                len(row["matched_skills"]) > 0
+                or row["factors"]["domain_match"] >= 0.60
+            )
+        ]
+        relaxed.sort(
+            key=lambda row: (
+                len(row["matched_skills"]),
+                row["factors"]["domain_match"],
+                row["composite_score"],
+            ),
+            reverse=True,
+        )
+        for row in relaxed[:max_results]:
+            row["match_label"] = "Related Role"
+            row["relaxed_match"] = True
+        qualified = relaxed
 
     return qualified[:max_results]

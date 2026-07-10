@@ -131,25 +131,20 @@ disha.ai/
 
 ### 📋 Prerequisites
 - **Python 3.14+** (with `uv` installed)
-- **Node.js 20+**
+- **Node.js 20+** (frontend only)
 - **Neon Postgres** database instance
-- Credentials/API keys for: **Groq**, **Mistral**, **Google Cloud**
+- Credentials/API keys for: **Groq** (required), **Mistral** (CV + interview), optional **Google Cloud** (voice)
+
+> **Full step-by-step setup:** see [SETUP.md](SETUP.md)
 
 ### 1. Setting Up the Backend
 
 1.  Navigate to the backend directory and configure environmental variables:
     ```bash
     cd backend
-    cp .env.example .env # Or create manually with credentials
+    cp .env.example .env
     ```
-2.  Populate your `.env` file with the following:
-    ```env
-    GROQ_API_KEY=gsk_...
-    DATABASE_URL=postgresql+asyncpg://...
-    MISTRAL_API_KEY=...
-    ADMIN_API_KEY=your_secure_admin_key
-    GOOGLE_APPLICATION_CREDENTIALS=/path/to/google-cloud-key.json
-    ```
+2.  Populate your `.env` file (minimum: `GROQ_API_KEY` + `DATABASE_URL`). See [backend/.env.example](backend/.env.example).
 3.  Install python dependencies and initialize database schemas:
     ```bash
     uv sync

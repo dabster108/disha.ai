@@ -16,6 +16,7 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.db.models import StudentProfile
+from app.services.learning_resources import build_resources_for_skill
 from app.services.llm_utils import call_structured
 
 GapSize = Literal["large", "small"]
@@ -28,11 +29,26 @@ def classify_gap_size(gap_data: dict) -> GapSize:
     return "large" if (missing + weak) >= 5 else "small"
 
 
+class RoadmapResource(BaseModel):
+    """A concrete, clickable internet resource attached to a task (not LLM-authored)."""
+
+    title: str
+    url: str
+    provider: str
+    type: Literal["video", "article", "docs", "course", "practice"]
+    cost: Literal["free", "paid"]
+    duration: str | None = None
+
+
 class RoadmapTask(BaseModel):
     title: str
     type: Literal["course", "project", "practice"]
     resource: str = Field(description="Concrete resource name, e.g. 'freeCodeCamp Docker course', 'Self-directed project'.")
     skill: str
+    resources: list[RoadmapResource] = Field(
+        default_factory=list,
+        description="Real learning links — filled deterministically after generation, never by the LLM.",
+    )
 
 
 class RoadmapWeek(BaseModel):
@@ -107,6 +123,18 @@ def _fallback_roadmap(gap_data: dict, profile: StudentProfile, gap_size: GapSize
     )
 
 
+def _attach_resources(plan: RoadmapPlan, budget: str | None) -> RoadmapPlan:
+    """Fill each task's `resources` with real, clickable links for its skill."""
+    for week in plan.weeks:
+        for task in week.tasks:
+            if not task.resources:
+                task.resources = [
+                    RoadmapResource(**r)
+                    for r in build_resources_for_skill(task.skill, budget=budget)
+                ]
+    return plan
+
+
 async def generate_roadmap(gap_data: dict, profile: StudentProfile, gap_size: GapSize) -> RoadmapPlan:
     time_per_week = profile.time_per_week or 10
     budget = profile.budget or "free"
@@ -133,4 +161,5 @@ async def generate_roadmap(gap_data: dict, profile: StudentProfile, gap_size: Ga
     settings = get_settings()
     llm = ChatGroq(model=settings.groq_model, temperature=0.3, api_key=settings.groq_api_key)
     result = await call_structured(llm, RoadmapPlan, prompt)
-    return result if result is not None else _fallback_roadmap(gap_data, profile, gap_size, time_per_week)
+    plan = result if result is not None else _fallback_roadmap(gap_data, profile, gap_size, time_per_week)
+    return _attach_resources(plan, profile.budget)
