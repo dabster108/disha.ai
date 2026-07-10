@@ -1,10 +1,163 @@
+"""Roadmap generation from a skill gap snapshot.
+
+POST /api/roadmap reuses an existing snapshot when given (or the profile's
+latest one), computing a fresh snapshot only if none exists yet — this avoids
+re-running the Chroma market query and Groq narrative when the caller just
+wants a plan from data that's already been assessed.
+"""
+
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException
+import uuid
+from datetime import datetime
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.deps import get_db
+from app.config import get_settings
+from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
+from app.services.roadmap import classify_gap_size, generate_roadmap
+from app.services.skill_gap import compute_combined_skill_gap, load_gap_context
 
 router = APIRouter(prefix="/api", tags=["roadmap"])
 
 
-@router.post("/roadmap", status_code=501)
-async def roadmap() -> None:
-    raise HTTPException(status_code=501, detail="Roadmap generation lands in a later phase (steps 5-6).")
+class RoadmapRequest(BaseModel):
+    profile_id: uuid.UUID
+    snapshot_id: uuid.UUID | None = None
+    force_replan: bool = False
+
+
+class RoadmapProgressRequest(BaseModel):
+    week: int
+    task_index: int
+    completed: bool = True
+
+
+class RoadmapOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    profile_id: uuid.UUID
+    snapshot_id: uuid.UUID | None
+    skill_gap: dict
+    weeks: list
+    total_weeks: int | None
+    summary: str | None
+    progress: dict
+    status: str
+    created_at: datetime
+
+
+async def _get_or_create_snapshot(db: AsyncSession, profile: StudentProfile) -> SkillGapSnapshot:
+    result = await db.execute(
+        select(SkillGapSnapshot)
+        .where(SkillGapSnapshot.profile_id == profile.id)
+        .order_by(SkillGapSnapshot.created_at.desc())
+        .limit(1)
+    )
+    snapshot = result.scalar_one_or_none()
+    if snapshot is not None:
+        return snapshot
+
+    # No snapshot yet — compute one (without narrative; the roadmap doesn't need it).
+    ctx = await load_gap_context(db, profile.id, n_jobs=get_settings().gap_n_jobs)
+    gap_data = compute_combined_skill_gap(ctx)
+    snapshot = SkillGapSnapshot(
+        profile_id=profile.id,
+        target_role=profile.target_role,
+        interview_session_id=ctx.interview.id if ctx.interview else None,
+        practice_session_id=ctx.practice.id if ctx.practice else None,
+        jobs_analyzed=gap_data["jobs_analyzed"],
+        match_ratio=gap_data["match_ratio"],
+        gap_data=gap_data,
+    )
+    db.add(snapshot)
+    await db.flush()
+    return snapshot
+
+
+@router.post("/roadmap", response_model=RoadmapOut, status_code=201)
+async def create_roadmap(payload: RoadmapRequest, db: AsyncSession = Depends(get_db)) -> Roadmap:
+    profile = await db.get(StudentProfile, payload.profile_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    if payload.snapshot_id is not None:
+        snapshot = await db.get(SkillGapSnapshot, payload.snapshot_id)
+        if snapshot is None or snapshot.profile_id != profile.id:
+            raise HTTPException(status_code=404, detail="Skill gap snapshot not found for this profile")
+    else:
+        snapshot = await _get_or_create_snapshot(db, profile)
+
+    gap_data = snapshot.gap_data
+    gap_size = classify_gap_size(gap_data)
+    plan = await generate_roadmap(gap_data, profile, gap_size)
+
+    if not payload.force_replan:
+        existing = await db.execute(
+            select(Roadmap)
+            .where(Roadmap.profile_id == profile.id, Roadmap.status == "active")
+            .order_by(Roadmap.created_at.desc())
+            .limit(1)
+        )
+        active = existing.scalar_one_or_none()
+        if active is not None:
+            active.status = "replanned"
+
+    roadmap = Roadmap(
+        profile_id=profile.id,
+        snapshot_id=snapshot.id,
+        skill_gap=gap_data,
+        weeks=[week.model_dump() for week in plan.weeks],
+        total_weeks=plan.total_weeks,
+        summary=plan.summary,
+        status="active",
+    )
+    db.add(roadmap)
+    await db.commit()
+    return roadmap
+
+
+@router.get("/roadmap/{profile_id}", response_model=RoadmapOut)
+async def latest_roadmap(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Roadmap:
+    result = await db.execute(
+        select(Roadmap)
+        .where(Roadmap.profile_id == profile_id)
+        .order_by(Roadmap.created_at.desc())
+        .limit(1)
+    )
+    roadmap = result.scalar_one_or_none()
+    if roadmap is None:
+        raise HTTPException(status_code=404, detail="No roadmap yet — POST /api/roadmap first.")
+    return roadmap
+
+
+@router.patch("/roadmap/{profile_id}/progress", response_model=RoadmapOut)
+async def update_roadmap_progress(
+    profile_id: uuid.UUID, payload: RoadmapProgressRequest, db: AsyncSession = Depends(get_db)
+) -> Roadmap:
+    result = await db.execute(
+        select(Roadmap)
+        .where(Roadmap.profile_id == profile_id, Roadmap.status == "active")
+        .order_by(Roadmap.created_at.desc())
+        .limit(1)
+    )
+    roadmap = result.scalar_one_or_none()
+    if roadmap is None:
+        raise HTTPException(status_code=404, detail="No active roadmap for this profile")
+
+    completed = list(roadmap.progress.get("completed", []))
+    entry = {"week": payload.week, "task_index": payload.task_index}
+    already_done = any(e == entry for e in completed)
+    if payload.completed and not already_done:
+        completed.append(entry)
+    elif not payload.completed and already_done:
+        completed = [e for e in completed if e != entry]
+
+    roadmap.progress = {"completed": completed}
+    await db.commit()
+    return roadmap

@@ -5,17 +5,21 @@ Agentic career platform for Nepali students. See [project.md](project.md) for th
 ```
 app/
   main.py              # FastAPI — uv run uvicorn app.main:app --reload
-  api/routes/          # health, profile, gap, roadmap, admin (scrape trigger)
-  db/                  # Neon Postgres (profiles, scrape_runs)
+  api/routes/          # health, profile, interview, practice, gap, roadmap, voice, admin
+  db/                  # Neon Postgres (profiles, sessions, snapshots, roadmaps, scrape_runs)
   rag/                 # jobs.json → Chroma ingest + search_jobs
-  services/            # cv_parser (Mistral OCR + Groq), skill_gap
-  orchestrator/        # LangGraph skeleton
+  services/            # cv_parser, interview, practice, skill_gap, roadmap, llm_utils
+  orchestrator/        # LangGraph pipeline: intake -> gap -> roadmap -> save
+    nodes/             # one file per graph node
+    tools/             # LangChain @tool wrappers (search_jobs, profile, assessments)
+    run.py             # standalone CLI: uv run python -m app.orchestrator.run
 scraper/
   scraper.py           # ALL adapters + kamkhoj aggregator (see KAMKHOJ_PROBE.md)
   run.py               # CLI + execute_scrape_run (used by admin API too)
   logging_config.py    # console + data/logs/ file logging
 scripts/refresh_jobs.sh
 data/                  # jobs.json, chroma/, logs/ (gitignored)
+OPTIMIZATION_NOTES.md  # backend audit: bugs fixed, gaps closed, deliberate non-fixes
 ```
 
 ## Job sources
@@ -123,7 +127,6 @@ curl -X POST http://127.0.0.1:8000/api/admin/scrape \
 | `GET /api/interview/{student_id}/history` | fetch stored interview sessions + turns |
 | `POST /api/voice/tts` | generate spoken audio from text using Google Cloud TTS |
 | `POST /api/voice/stt` | transcribe uploaded audio using Google Cloud Speech-to-Text |
-| `POST /api/roadmap` | 501 — next phase |
 
 The interview's question generation, answer evaluation, and summary all run on
 `ChatMistralAI` (`interview_mistral_model`, default `mistral-small-latest`) using
@@ -212,7 +215,7 @@ deterministic fallback narrative is built from the same data.
 
 | Endpoint | What it does |
 |---|---|
-| `POST /api/gap` | `{profile_id, interview_session_id?, practice_session_id?, include_narrative?, n_jobs?}` → combined report, saved as a snapshot. Omitted session ids default to the latest *completed* session of that type. |
+| `POST /api/gap` | `{profile_id, interview_session_id?, practice_session_id?, include_narrative?, run_roadmap?, n_jobs?}` → combined report, saved as a snapshot. Omitted session ids default to the latest *completed* session of that type. `run_roadmap: true` also generates and saves a roadmap from this snapshot in the same call (`roadmap_id` in the response). |
 | `POST /api/gap/market` | `{profile_id}` or `{skills, target_role}` → market-only comparison (no interview/practice merge; unchanged from the original `compute_skill_gap`) |
 | `GET /api/gap/{profile_id}` | latest snapshot |
 | `GET /api/gap/{profile_id}/history?limit=10` | snapshot history |
@@ -248,9 +251,78 @@ Response shape (truncated):
 ```
 
 Config (`app/config.py`): `gap_n_jobs` (20), `gap_include_narrative_default` (true).
-The LangGraph `gap_node` (`app/orchestrator/nodes/gap.py`) runs the same combined
-agent when `profile_id` is present in state, falling back to market-only otherwise
-— not wired to any endpoint yet, prepared for the roadmap phase.
+
+## Roadmap agent
+
+Turns a snapshot's `gap_data` into a week-by-week plan (`ChatGroq` + structured
+output, same retry-then-fallback pattern as everything else). Depth is decided
+once by `classify_gap_size()` (`app/services/roadmap.py`) — `missing + weak >= 5`
+→ **large** gap → ~8-week plan; otherwise **small** → ~4 weeks + a final
+interview-prep week. Every task is grounded in a skill from `priority_learn` /
+`market_missing_skills`; free budget → YouTube/free docs/self-directed projects,
+paid budget → may mention Udemy or Nepal bootcamps generically. Week `hours`
+never exceed the profile's `time_per_week`.
+
+`POST /api/roadmap` reuses an existing snapshot instead of recomputing the gap:
+pass `snapshot_id` to pin one, or omit it to use the profile's latest (a fresh
+snapshot is computed automatically if the profile has none yet — no narrative,
+since the roadmap doesn't need it). By default the previous active roadmap is
+marked `replanned` when a new one is created; pass `force_replan: true` to force
+a new roadmap even if nothing changed.
+
+| Endpoint | What it does |
+|---|---|
+| `POST /api/roadmap` | `{profile_id, snapshot_id?, force_replan?}` → generates + saves a roadmap |
+| `GET /api/roadmap/{profile_id}` | latest roadmap (any status) |
+| `PATCH /api/roadmap/{profile_id}/progress` | `{week, task_index, completed}` → toggles one task in the active roadmap's `progress.completed` list |
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/roadmap \
+  -H "Content-Type: application/json" -d '{"profile_id":"<uuid>"}'
+
+curl http://127.0.0.1:8000/api/roadmap/<profile_id>
+```
+
+## LangGraph orchestrator
+
+`app/orchestrator/graph.py` wires the whole pipeline as a real, runnable graph —
+not just a skeleton:
+
+```
+START -> intake -> gap -> [route_after_gap] -> roadmap? -> save -> END
+```
+
+- **intake** (no LLM) — loads the profile, populates `student_skills`, `target_role`,
+  `location`, `time_per_week`, `budget` into state.
+- **gap** — `load_gap_context` + `compute_combined_skill_gap` (see above), optional
+  Groq narrative, and `classify_gap_size` (the large/small threshold is computed
+  exactly once here and read by both the router and the roadmap node).
+- **route_after_gap** — `error` → END; `run_roadmap=False` → straight to **save**
+  (snapshot only); otherwise → **roadmap**.
+- **roadmap** — `app.services.roadmap.generate_roadmap`, sized by `gap_size`.
+- **save** (no LLM) — persists `skill_gap_snapshots` (+ `roadmaps` if a plan was generated).
+
+`POST /api/gap` and `POST /api/roadmap` call the same underlying service functions
+directly rather than the compiled graph object, to avoid re-running work across
+two already-tested endpoints — the graph itself is the reference pipeline, fully
+wired and independently testable via its own CLI:
+
+```bash
+uv run python -m app.orchestrator.run --profile-id <uuid>
+uv run python -m app.orchestrator.run --profile-id <uuid> --no-roadmap --no-narrative
+```
+
+### LangChain tools
+
+`app/orchestrator/tools/` wraps the app's existing lookups as `@tool`-decorated
+functions — one implementation each, reusable by any future agent (e.g. the
+Nepali chatbot): `search_jobs_tool` (wraps `search_jobs()`, never duplicates
+retriever logic), `get_profile_tool`, `get_latest_assessments_tool` (latest
+completed interview + practice summaries). Not yet wired into a tool-calling
+agent loop — `roadmap_node` reads `sample_jobs` already present in `gap_data`
+instead of re-querying, since the job list was already fetched computing the
+gap. An MCP server over the same tools was scoped as optional and skipped this
+round; see `OPTIMIZATION_NOTES.md`.
 
 ## Architecture
 

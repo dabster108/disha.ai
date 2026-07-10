@@ -18,7 +18,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
 from app.config import get_settings
-from app.db.models import SkillGapSnapshot, StudentProfile
+from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
+from app.services.roadmap import classify_gap_size, generate_roadmap
 from app.services.skill_gap import compute_combined_skill_gap, compute_market_gap, generate_gap_narrative, load_gap_context
 
 router = APIRouter(prefix="/api", tags=["skill-gap"])
@@ -29,6 +30,7 @@ class CombinedGapRequest(BaseModel):
     interview_session_id: uuid.UUID | None = None
     practice_session_id: uuid.UUID | None = None
     include_narrative: bool | None = None
+    run_roadmap: bool = Field(False, description="Also generate and save a roadmap from this snapshot.")
     n_jobs: int | None = Field(None, ge=1, le=100)
 
 
@@ -45,6 +47,7 @@ class SnapshotOut(BaseModel):
     gap_data: dict
     narrative_summary: str | None
     created_at: datetime
+    roadmap_id: uuid.UUID | None = None
 
 
 class MarketGapRequest(BaseModel):
@@ -86,8 +89,27 @@ async def combined_gap(payload: CombinedGapRequest, db: AsyncSession = Depends(g
         narrative_summary=narrative,
     )
     db.add(snapshot)
+    await db.flush()
+
+    roadmap_id: uuid.UUID | None = None
+    if payload.run_roadmap:
+        gap_size = classify_gap_size(gap_data)
+        plan = await generate_roadmap(gap_data, ctx.profile, gap_size)
+        roadmap = Roadmap(
+            profile_id=ctx.profile.id,
+            snapshot_id=snapshot.id,
+            skill_gap=gap_data,
+            weeks=[week.model_dump() for week in plan.weeks],
+            total_weeks=plan.total_weeks,
+            summary=plan.summary,
+            status="active",
+        )
+        db.add(roadmap)
+        await db.flush()
+        roadmap_id = roadmap.id
+
     await db.commit()
-    return snapshot
+    return SnapshotOut.model_validate(snapshot).model_copy(update={"roadmap_id": roadmap_id})
 
 
 @router.post("/gap/market")
