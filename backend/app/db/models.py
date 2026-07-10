@@ -55,8 +55,12 @@ class Roadmap(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("student_profiles.id"))
+    snapshot_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("skill_gap_snapshots.id"), nullable=True)
     skill_gap: Mapped[dict] = mapped_column(JSONB, default=dict)
     weeks: Mapped[list] = mapped_column(JSONB, default=list)
+    total_weeks: Mapped[int | None] = mapped_column(Integer)
+    summary: Mapped[str | None] = mapped_column(Text)
+    progress: Mapped[dict] = mapped_column(JSONB, default=dict)  # {"completed": [{"week":1,"task_index":0}, ...]}
     status: Mapped[str] = mapped_column(String(20), default="active")  # active | completed | replanned
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

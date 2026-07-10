@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from pypdf import PdfReader
 
 from app.config import get_settings
+from app.services.llm_utils import call_structured
 
 MAX_CV_CHARS = 12000
 MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr"
@@ -133,7 +134,6 @@ def _llm() -> ChatGroq:
 
 
 async def parse_cv(cv_text: str) -> ParsedCV:
-    structured_llm = _llm().with_structured_output(ParsedCV)
     prompt = (
         "You are a careful CV parser for a Nepali career platform. "
         "Extract structured profile data from the resume text below. "
@@ -142,7 +142,11 @@ async def parse_cv(cv_text: str) -> ParsedCV:
         "List experience and education most recent first.\n\n"
         f"Resume text:\n{cv_text[:MAX_CV_CHARS]}"
     )
-    return await structured_llm.ainvoke(prompt)
+    result = await call_structured(_llm(), ParsedCV, prompt)
+    # Deliberately empty (not heuristic-guessed) on failure: this endpoint's
+    # whole contract is "no invented skills" — an empty result the student
+    # fills in manually is safer than a fabricated one.
+    return result if result is not None else ParsedCV()
 
 
 # Backward-compatible alias used by older imports.

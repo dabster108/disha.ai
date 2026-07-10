@@ -5,24 +5,25 @@ import uuid
 from app.db.models import StudentProfile
 from app.db.session import async_session_factory
 from app.orchestrator.state import CareerState
-from app.services.roadmap import generate_roadmap
 
 
-async def roadmap_node(state: CareerState) -> dict:
-    if state.get("error"):
-        return {}
-
+async def intake_node(state: CareerState) -> dict:
+    """Load the profile and populate constraints. No LLM."""
     profile_id = state.get("profile_id")
     if not profile_id:
-        # Legacy market-only path has no profile to plan against.
-        return {"roadmap": None}
+        # Legacy market-only path: caller already supplied student_skills/target_role.
+        return {}
 
     async with async_session_factory() as db:
         profile = await db.get(StudentProfile, uuid.UUID(profile_id))
+
     if profile is None:
         return {"error": f"Profile {profile_id} not found"}
 
-    gap_data = state.get("skill_gap") or {}
-    gap_size = state.get("gap_size", "small")
-    plan = await generate_roadmap(gap_data, profile, gap_size)
-    return {"roadmap": plan.model_dump()}
+    return {
+        "student_skills": profile.skills or [],
+        "target_role": profile.target_role,
+        "location": profile.location,
+        "time_per_week": profile.time_per_week,
+        "budget": profile.budget,
+    }
