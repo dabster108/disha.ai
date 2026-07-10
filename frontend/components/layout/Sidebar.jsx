@@ -40,7 +40,9 @@ export default function Sidebar() {
       <div className="mt-auto space-y-1">
         <Link
           href="/settings"
-          className="flex items-center gap-3 rounded-lg px-3 py-2.5 font-medium text-secondary transition-colors hover:bg-surface-container-low"
+          className={`flex items-center gap-3 rounded-lg px-3 py-2.5 font-medium transition-colors hover:bg-surface-container-low ${
+            pathname.startsWith("/settings") ? "font-bold text-primary" : "text-secondary"
+          }`}
         >
           <Icon name="settings" size={20} />
           <span className="text-label-md">Settings</span>

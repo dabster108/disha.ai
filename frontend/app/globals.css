@@ -109,6 +109,66 @@ html {
   color-scheme: light;
 }
 
+html.dark {
+  color-scheme: dark;
+  --background: #111211;
+  --foreground: #f1f1ef;
+}
+
+.dark {
+  --color-background: #111211;
+  --color-foreground: #f1f1ef;
+  --color-surface: #111211;
+  --color-surface-dim: #1a1c1b;
+  --color-surface-bright: #1e201f;
+  --color-surface-container-lowest: #1a1c1b;
+  --color-surface-container-low: #1e201f;
+  --color-surface-container: #232524;
+  --color-surface-container-high: #2a2c2b;
+  --color-surface-container-highest: #323433;
+  --color-on-surface: #f1f1ef;
+  --color-on-surface-variant: #c2c6c4;
+  --color-inverse-surface: #e2e3e1;
+  --color-inverse-on-surface: #1a1c1b;
+  --color-outline: #8a8f8d;
+  --color-outline-variant: #424646;
+  --color-secondary: #a8a7a6;
+  --color-on-secondary: #1c1b1b;
+  --color-secondary-container: #2f3130;
+  --color-on-secondary-container: #e5e2e1;
+  --color-surface-variant: #2a2c2b;
+  --color-on-background: #f1f1ef;
+  --shadow-ambient: 0 4px 20px rgba(0, 0, 0, 0.35);
+}
+
+.dark body {
+  background: #111211;
+  color: #f1f1ef;
+}
+
+html[data-font-size="large"] {
+  font-size: 17px;
+}
+
+html[data-compact="true"] .profile-section {
+  padding-top: 1rem;
+  padding-bottom: 1rem;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+html[data-reduce-motion="true"] * {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
 body {
   background: #f9f9f7;
   color: #1a1c1b;

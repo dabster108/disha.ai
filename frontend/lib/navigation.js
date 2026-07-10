@@ -8,6 +8,7 @@ export const navItems = [
   { href: "/practice", label: "Skill Practice", icon: "sports_esports" },
   { href: "/jobs", label: "Job Matches", icon: "work_outline" },
   { href: "/applications", label: "Applications", icon: "assignment" },
+  // { href: "/profile", label: "Profile", icon: "person" },
 ];
 
 export function isActivePath(pathname, href) {

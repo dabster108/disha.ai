@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import { useProfile } from "@/context/ProfileContext";
@@ -47,12 +48,13 @@ export default function TopHeader({ searchPlaceholder = "Search roadmap, lessons
             <Icon name="logout" size={18} />
             Log out
           </button>
-          <div
-            className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-fixed font-bold text-on-primary-fixed"
+          <Link
+            href="/profile"
+            className="flex h-10 w-10 items-center justify-center rounded-full bg-primary-fixed font-bold text-on-primary-fixed transition-opacity hover:opacity-90"
             title={profile?.full_name || "Profile"}
           >
             {initial}
-          </div>
+          </Link>
         </div>
       </div>
     </header>
