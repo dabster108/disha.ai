@@ -1,28 +1,29 @@
 import type { ApiProfile, StudentProfileExtended } from "@/types/profile";
+import { updateProfile } from "@/lib/api";
 
 const STORAGE_PREFIX = "disha-profile-extended-";
 
 export function createDefaultExtended(api?: ApiProfile | null): StudentProfileExtended {
-  const name = api?.full_name || "Pratik Sharma";
-  const email = api?.email || "pratik.sharma@example.com";
-  const phone = api?.phone || "+977 9801234567";
-  const role = api?.target_role || "Backend Developer";
-  const location = api?.location || "Kathmandu, Nepal";
+  const name = api?.full_name || "";
+  const email = api?.email || "";
+  const phone = api?.phone || "";
+  const role = api?.target_role || "Software Developer";
+  const location = api?.location || "";
 
   return {
     personal: {
       fullName: name,
-      username: name.toLowerCase().replace(/\s+/g, "."),
+      username: name ? name.toLowerCase().replace(/\s+/g, ".") : "",
       email,
       phone,
-      dateOfBirth: "2001-08-15",
-      gender: "Male",
-      address: "Baluwatar, Ward 4",
-      city: "Kathmandu",
-      province: "Bagmati",
+      dateOfBirth: "",
+      gender: "",
+      address: "",
+      city: location.split(",")[0]?.trim() || "",
+      province: "",
       country: "Nepal",
     },
-    university: "Kathmandu University",
+    university: "",
     currentRole: role,
     coverImage: null,
     avatarUrl: null,
@@ -30,72 +31,36 @@ export function createDefaultExtended(api?: ApiProfile | null): StudentProfileEx
     experience: mapExperience(api?.experience),
     careerGoal: {
       dreamJob: role,
-      preferredIndustry: "Technology / Software",
+      preferredIndustry: "",
       workStyle: "Hybrid",
-      expectedSalary: "NPR 80,000 – 120,000 / month",
-      preferredLocations: [location.split(",")[0] || "Kathmandu", "Remote"],
-      careerObjective:
-        "Build scalable backend systems for Nepal's growing tech sector while contributing to open-source and mentoring junior developers.",
-      targetCompanies: ["F1Soft", "Verisk Nepal", "CloudFactory", "Remote-first startups"],
+      expectedSalary: "",
+      preferredLocations: location ? [location.split(",")[0] || location] : [],
+      careerObjective: api?.summary || "",
+      targetCompanies: [],
     },
     skills: mapSkills(api?.skills),
-    projects: [
-      {
-        id: "proj-1",
-        title: "DISHA Career Platform API",
-        description: "FastAPI backend with skill-gap analysis, job matching via Chroma, and voice interview orchestration.",
-        technologies: ["Python", "FastAPI", "PostgreSQL", "ChromaDB"],
-        githubUrl: "https://github.com/example/disha-api",
-        liveUrl: "",
-        images: [],
-        role: "Backend Lead",
-        duration: "Jan 2025 – Present",
-        featured: true,
-      },
-      {
-        id: "proj-2",
-        title: "Nepal Job Scraper Pipeline",
-        description: "Hybrid scraper ingesting postings from KamKhoj, MeroJob, and KumariJob with deduplication.",
-        technologies: ["Python", "Playwright", "Crawl4AI"],
-        githubUrl: "https://github.com/example/nepal-jobs",
-        liveUrl: "",
-        images: [],
-        role: "Solo Developer",
-        duration: "Nov 2024 – Feb 2025",
-        featured: false,
-      },
-    ],
-    certifications: [
-      {
-        id: "cert-1",
-        certificate: "AWS Cloud Practitioner",
-        organization: "Amazon Web Services",
-        issueDate: "2024-06-01",
-        expiryDate: "2027-06-01",
-        credentialUrl: "https://aws.amazon.com/verification",
-        credentialId: "AWS-CP-2024-XXXX",
-      },
-    ],
+    projects: [],
+    certifications: [],
     portfolio: {
       resumeFileName: null,
-      portfolioUrl: "https://pratik.dev",
-      github: "https://github.com/pratiksharma",
-      linkedin: "https://linkedin.com/in/pratiksharma",
-      leetcode: "https://leetcode.com/pratiksharma",
+      portfolioUrl: "",
+      github: "",
+      linkedin: "",
+      leetcode: "",
       kaggle: "",
       codeforces: "",
-      hackerrank: "https://hackerrank.com/pratiksharma",
+      hackerrank: "",
       medium: "",
-      personalWebsite: "https://pratik.dev",
+      personalWebsite: "",
     },
     careerPreferences: {
-      expectedSalary: "NPR 80,000 – 120,000 / month",
-      preferredLocations: ["Kathmandu", "Remote"],
-      preferredRoles: [role, "Full Stack Developer"],
-      preferredCompanySize: "50–500 employees",
+      expectedSalary: "",
+      preferredLocations: location ? [location.split(",")[0] || location] : [],
+      preferredRoles: role ? [role] : [],
+      preferredCompanySize: "",
       internship: false,
       fullTime: true,
-      contract: true,
+      contract: false,
       immediateAvailability: true,
     },
     privacy: {
@@ -105,43 +70,28 @@ export function createDefaultExtended(api?: ApiProfile | null): StudentProfileEx
       universityVisibility: false,
     },
     activity: {
-      learningHours: 42,
-      projectsCompleted: 2,
-      mockInterviews: 1,
+      learningHours: 0,
+      projectsCompleted: 0,
+      mockInterviews: 0,
       applications: 0,
-      certificates: 1,
-      achievements: 3,
+      certificates: 0,
+      achievements: 0,
     },
     aiSummary: {
-      jobReadiness: 58,
-      resumeScore: 72,
-      bestMatchingRole: "Full Stack Developer",
-      topStrengths: ["Python", "FastAPI", "PostgreSQL"],
-      skillsToImprove: ["Docker", "AWS", "System Design"],
-      estimatedJobReady: "8–10 weeks",
-      roadmapProgress: 12,
-      nextRecommendation: "Complete Week 2 Docker fundamentals and take a mock interview to verify backend skills.",
+      jobReadiness: 0,
+      resumeScore: 0,
+      bestMatchingRole: role,
+      topStrengths: api?.skills?.slice(0, 3) || [],
+      skillsToImprove: [],
+      estimatedJobReady: "—",
+      roadmapProgress: 0,
+      nextRecommendation: "Run a skill gap analysis to get personalized recommendations.",
     },
   };
 }
 
 function mapEducation(raw?: Array<Record<string, unknown>>) {
-  if (!raw?.length) {
-    return [
-      {
-        id: "edu-1",
-        institution: "Kathmandu University",
-        degree: "Bachelor of Engineering",
-        faculty: "School of Engineering",
-        major: "Computer Science",
-        startDate: "2020-09",
-        endDate: "2024-06",
-        currentSemester: "",
-        cgpa: "3.6",
-        description: "Focus on algorithms, databases, and software engineering.",
-      },
-    ];
-  }
+  if (!raw?.length) return [];
   return raw.map((e, i) => ({
     id: `edu-${i}`,
     institution: String(e.institution || e.school || ""),
@@ -157,22 +107,7 @@ function mapEducation(raw?: Array<Record<string, unknown>>) {
 }
 
 function mapExperience(raw?: Array<Record<string, unknown>>) {
-  if (!raw?.length) {
-    return [
-      {
-        id: "exp-1",
-        company: "OrchidX Labs",
-        position: "Backend Intern",
-        employmentType: "Internship",
-        location: "Kathmandu",
-        startDate: "2024-01",
-        endDate: "2024-08",
-        description: "Built REST APIs and integrated PostgreSQL for internal tools.",
-        technologies: ["Python", "FastAPI", "PostgreSQL"],
-        achievements: ["Reduced API response time by 30%"],
-      },
-    ];
-  }
+  if (!raw?.length) return [];
   return raw.map((e, i) => ({
     id: `exp-${i}`,
     company: String(e.company || ""),
@@ -188,7 +123,7 @@ function mapExperience(raw?: Array<Record<string, unknown>>) {
 }
 
 function mapSkills(raw?: string[]) {
-  const list = raw?.length ? raw : ["Python", "FastAPI", "JavaScript", "PostgreSQL", "React", "Docker"];
+  if (!raw?.length) return [];
   const categories: Record<string, import("@/types/profile").SkillCategory> = {
     python: "Programming Languages",
     javascript: "Programming Languages",
@@ -203,31 +138,92 @@ function mapSkills(raw?: string[]) {
     tensorflow: "AI",
     communication: "Soft Skills",
   };
-  return list.map((name, i) => {
+  return raw.map((name, i) => {
     const key = name.toLowerCase().replace(/\s+/g, "");
     return {
       id: `skill-${i}`,
       name,
       category: categories[key] || "Frameworks",
-      level: i < 2 ? "Advanced" : "Intermediate",
-      yearsOfExperience: i < 2 ? 2 : 1,
+      level: "Intermediate",
+      yearsOfExperience: 1,
     } as import("@/types/profile").SkillEntry;
   });
 }
 
-export function loadExtendedProfile(profileId: string | null, api?: ApiProfile | null): StudentProfileExtended {
+export function mergeExtendedProfile(api?: ApiProfile | null): StudentProfileExtended {
   const base = createDefaultExtended(api);
-  if (!profileId || typeof window === "undefined") return base;
+  const meta = api?.profile_meta;
+  if (!meta || typeof meta !== "object") return base;
+  return { ...base, ...meta };
+}
+
+export function loadExtendedProfile(profileId: string | null, api?: ApiProfile | null): StudentProfileExtended {
+  const merged = mergeExtendedProfile(api);
+  if (!profileId || typeof window === "undefined") return merged;
   try {
     const raw = localStorage.getItem(`${STORAGE_PREFIX}${profileId}`);
-    if (!raw) return base;
-    return { ...base, ...JSON.parse(raw) };
+    if (!raw) return merged;
+    return { ...merged, ...JSON.parse(raw) };
   } catch {
-    return base;
+    return merged;
   }
 }
 
+function extendedToApiPayload(data: StudentProfileExtended) {
+  return {
+    full_name: data.personal.fullName || null,
+    email: data.personal.email || null,
+    phone: data.personal.phone || null,
+    target_role: data.careerGoal.dreamJob || data.currentRole,
+    location: data.personal.city || null,
+    summary: data.careerGoal.careerObjective || null,
+    skills: data.skills.map((s) => s.name),
+    education: data.education.map((e) => ({
+      institution: e.institution,
+      degree: e.degree,
+      faculty: e.faculty,
+      field: e.major,
+      start_year: e.startDate,
+      end_year: e.endDate,
+      gpa: e.cgpa,
+      description: e.description,
+    })),
+    experience: data.experience.map((e) => ({
+      company: e.company,
+      title: e.position,
+      employment_type: e.employmentType,
+      location: e.location,
+      start_date: e.startDate,
+      end_date: e.endDate,
+      description: e.description,
+      technologies: e.technologies,
+      achievements: e.achievements,
+    })),
+    profile_meta: data,
+  };
+}
+
+let saveTimer: ReturnType<typeof setTimeout> | null = null;
+
 export function saveExtendedProfile(profileId: string, data: StudentProfileExtended) {
-  if (typeof window === "undefined") return;
-  localStorage.setItem(`${STORAGE_PREFIX}${profileId}`, JSON.stringify(data));
+  if (typeof window !== "undefined") {
+    localStorage.setItem(`${STORAGE_PREFIX}${profileId}`, JSON.stringify(data));
+  }
+  if (saveTimer) clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => {
+    updateProfile(profileId, extendedToApiPayload(data)).catch(() => {
+      /* keep local copy; user can retry on next edit */
+    });
+  }, 600);
+}
+
+export async function flushExtendedProfile(profileId: string, data: StudentProfileExtended) {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  if (typeof window !== "undefined") {
+    localStorage.setItem(`${STORAGE_PREFIX}${profileId}`, JSON.stringify(data));
+  }
+  return updateProfile(profileId, extendedToApiPayload(data));
 }

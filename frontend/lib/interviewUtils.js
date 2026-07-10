@@ -1,5 +1,20 @@
 /** Max interview turns — mirrors backend MAX_QUESTION_TURNS. */
-export const INTERVIEW_MAX_TURNS = 4;
+export const INTERVIEW_MAX_TURNS = 15;
+
+/** Build the final analysis message shown in chat when the interview ends. */
+export function formatInterviewSummary(session) {
+  if (!session) return "Interview complete.";
+  const lines = [];
+  if (session.overall_score != null) {
+    lines.push(`Interview complete — overall score: ${session.overall_score}/10`, "");
+  } else {
+    lines.push("Interview complete.", "");
+  }
+  if (session.summary) {
+    lines.push(session.summary);
+  }
+  return lines.join("\n").trim();
+}
 
 export const INTERVIEW_DURATION_OPTIONS = [5, 10, 15, 30];
 

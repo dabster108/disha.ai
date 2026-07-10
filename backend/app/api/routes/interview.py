@@ -18,8 +18,9 @@ from app.services.interview import (
     choose_initial_difficulty,
     detect_track,
     evaluate_answer,
-    generate_next_question,
-    generate_opening_question,
+    evaluate_with_next_question,
+    fallback_opening_question,
+    format_session_summary_text,
     summarize_session,
 )
 
@@ -114,7 +115,10 @@ async def start_interview(
     track = detect_track(profile)
     difficulty = choose_initial_difficulty(profile)
     welcome_message = build_welcome_message(profile, track, difficulty)
-    opening_question = await generate_opening_question(profile, track, difficulty)
+    # The opening is always a role-anchored background question — use the
+    # deterministic template instead of an LLM call so the interview starts
+    # instantly (saves ~3-4s of Mistral latency before the first question).
+    opening_question = fallback_opening_question(profile, difficulty)
 
     session = InterviewSession(
         profile_id=profile.id,
@@ -160,9 +164,22 @@ async def answer_interview(
 
     profile = await _get_profile_or_404(db, session.profile_id)
     previous_turns = [turn for turn in turns if turn.turn_index < current_turn.turn_index]
-    evaluation = await evaluate_answer(profile, session, current_turn, payload.answer.strip(), previous_turns)
+    answer_text = payload.answer.strip()
 
-    current_turn.answer = payload.answer.strip()
+    next_turn: InterviewTurn | None = None
+    interview_completed = current_turn.turn_index >= MAX_QUESTION_TURNS
+    next_question = None
+
+    if interview_completed:
+        # Final turn: evaluate only, then summarize.
+        evaluation = await evaluate_answer(profile, session, current_turn, answer_text, previous_turns)
+    else:
+        # Non-final turn: evaluate + choose next question in a single LLM call.
+        evaluation, next_question = await evaluate_with_next_question(
+            profile, session, current_turn, answer_text, previous_turns
+        )
+
+    current_turn.answer = answer_text
     current_turn.score = round(evaluation.score, 2)
     current_turn.feedback = evaluation.feedback
     current_turn.dimensions = {
@@ -173,19 +190,15 @@ async def answer_interview(
     }
     session.difficulty = evaluation.suggested_difficulty
 
-    next_turn: InterviewTurn | None = None
-    interview_completed = current_turn.turn_index >= MAX_QUESTION_TURNS
-
     if interview_completed:
         summary = await summarize_session(profile, session, turns)
         session.status = "completed"
         session.overall_score = round(summary.overall_score, 2)
-        session.summary = summary.summary
+        session.summary = format_session_summary_text(summary)
         session.strengths = summary.strengths
         session.weaknesses = summary.weaknesses
         session.finished_at = datetime.now(timezone.utc)
     else:
-        next_question = await generate_next_question(profile, session, turns, evaluation)
         next_turn = InterviewTurn(
             turn_index=current_turn.turn_index + 1,
             question=next_question.question,

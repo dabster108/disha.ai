@@ -92,6 +92,26 @@ export function getProfile(profileId) {
   return apiFetch(`/api/profile/${profileId}`);
 }
 
+/** @param {string} profileId @param {object} payload */
+export function updateProfile(profileId, payload) {
+  return apiFetch(`/api/profile/${profileId}`, { method: "PATCH", json: payload });
+}
+
+// ---------------------------------------------------------------------------
+// Dashboard (aggregator)
+// ---------------------------------------------------------------------------
+
+/** @param {string} profileId */
+export function getDashboard(profileId) {
+  return apiFetch(`/api/dashboard/${profileId}`);
+}
+
+/** @param {string} [profileId] */
+export function getLeaderboard(profileId) {
+  const qs = profileId ? `?profile_id=${profileId}` : "";
+  return apiFetch(`/api/leaderboard${qs}`);
+}
+
 // ---------------------------------------------------------------------------
 // Interview
 // ---------------------------------------------------------------------------
@@ -179,6 +199,13 @@ export const updateRoadmapProgress = (profileId, week, taskIndex, completed, res
       completed,
       ...(resourceIndex != null ? { resource_index: resourceIndex } : {}),
     },
+  });
+
+/** Toggle a single skill-path node (roadmap.sh-style path). */
+export const updateRoadmapNodeProgress = (profileId, nodeId, completed) =>
+  apiFetch(`/api/roadmap/${profileId}/progress`, {
+    method: "PATCH",
+    json: { node_id: nodeId, completed },
   });
 
 // ---------------------------------------------------------------------------

@@ -68,6 +68,28 @@ def skills_match(a: str, b: str) -> bool:
     return normalize_skill_name(a) == normalize_skill_name(b)
 
 
+def compute_profile_evidence(profile: StudentProfile) -> dict:
+    """Skills implied by profile_meta (structured skill levels + project tech
+    stacks) — the single evidence source reused by roadmap path seeding and,
+    here, surfaced in gap_data so the roadmap LLM prompt can see it too."""
+    meta = profile.profile_meta or {}
+
+    skill_levels: dict[str, str] = {}
+    for entry in meta.get("skills") or []:
+        name = (entry or {}).get("name")
+        level = (entry or {}).get("level")
+        if name and level:
+            skill_levels[normalize_skill_name(name)] = str(level).strip().casefold()
+
+    project_skills: set[str] = set()
+    for project in meta.get("projects") or []:
+        for tech in (project or {}).get("technologies") or []:
+            if tech:
+                project_skills.add(normalize_skill_name(tech))
+
+    return {"skill_levels": skill_levels, "project_skills": sorted(project_skills)}
+
+
 # --------------------------------------------------------------------------
 # Signal 1 + 2 — claimed skills vs market demand (deterministic, no LLM)
 # --------------------------------------------------------------------------
@@ -619,6 +641,7 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
             "practice_session_id": str(ctx.practice.id) if ctx.practice else None,
         },
         "claimed_skills": claimed_skills,
+        "profile_evidence": compute_profile_evidence(profile),
         "matched_skills": matched_skills,
         "market_missing_skills": market_missing_skills,
         "verified_strong_skills": verified_strong_skills,
@@ -686,7 +709,28 @@ def _fallback_narrative(gap_data: dict, profile: StudentProfile) -> str:
     return " ".join(parts)
 
 
+def slim_gap_for_llm(gap_data: dict) -> dict:
+    """Trim gap JSON for LLM prompts — keeps signal, drops bulk (sample job bodies, etc.)."""
+    sample_jobs = gap_data.get("sample_jobs") or []
+    return {
+        "readiness_score": gap_data.get("readiness_score"),
+        "match_ratio": gap_data.get("match_ratio"),
+        "jobs_analyzed": gap_data.get("jobs_analyzed"),
+        "priority_learn": (gap_data.get("priority_learn") or [])[:5],
+        "market_missing_skills": (gap_data.get("market_missing_skills") or [])[:5],
+        "verified_strong_skills": (gap_data.get("verified_strong_skills") or [])[:3],
+        "verified_weak_skills": (gap_data.get("verified_weak_skills") or [])[:3],
+        "matched_skills": (gap_data.get("matched_skills") or [])[:5],
+        "sample_jobs": [
+            {"title": j.get("title"), "company": j.get("company")}
+            for j in sample_jobs[:3]
+            if isinstance(j, dict)
+        ],
+    }
+
+
 async def generate_gap_narrative(gap_data: dict, profile: StudentProfile) -> str:
+    slim = slim_gap_for_llm(gap_data)
     prompt = (
         "You are Disha, a career counselor for Nepali students.\n"
         "Explain the student's skill gap based ONLY on the JSON data provided.\n"
@@ -698,7 +742,7 @@ async def generate_gap_narrative(gap_data: dict, profile: StudentProfile) -> str
         "4. One line in Nepali (Roman or Devanagari) encouraging the student.\n"
         "Keep under 120 words. Mention Nepal job market context when sample_jobs exist.\n"
         "Include 1-2 real job titles from sample_jobs if provided.\n\n"
-        f"Gap data JSON:\n{json.dumps(gap_data, ensure_ascii=False)}"
+        f"Gap data JSON:\n{json.dumps(slim, ensure_ascii=False)}"
     )
     settings = get_settings()
     llm = ChatGroq(model=settings.groq_model, temperature=0.3, api_key=settings.groq_api_key)

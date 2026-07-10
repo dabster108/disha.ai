@@ -175,7 +175,7 @@ async def transcribe_with_groq(content: bytes, content_type: str | None) -> Tran
     filename = _audio_filename(content_type)
     mime = (content_type or "audio/webm").split(";")[0].strip() or "audio/webm"
 
-    async with httpx.AsyncClient(timeout=90.0) as client:
+    async with httpx.AsyncClient(timeout=45.0) as client:
         response = await client.post(
             "https://api.groq.com/openai/v1/audio/transcriptions",
             headers={"Authorization": f"Bearer {settings.groq_api_key2}"},

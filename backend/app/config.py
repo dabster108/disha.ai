@@ -18,7 +18,9 @@ class Settings(BaseSettings):
     groq_api_key: str
     # Separate Groq key for voice STT (Whisper) — keeps STT quota distinct from CV/practice.
     groq_api_key2: str | None = None
-    groq_whisper_model: str = "whisper-large-v3"
+    # Turbo is ~2-4x faster than whisper-large-v3 with near-identical accuracy —
+    # meaningfully cuts STT latency in the voice interview loop.
+    groq_whisper_model: str = "whisper-large-v3-turbo"
     database_url: str
     mistral_api_key: str | None = None
     # Separate key for the interview LLM (distinct quota from the OCR key above).

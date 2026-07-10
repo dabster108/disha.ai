@@ -1,6 +1,7 @@
 export const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: "dashboard" },
   { href: "/journey", label: "My Journey", icon: "auto_awesome" },
+  { href: "/leaderboard", label: "Leaderboard", icon: "leaderboard" },
   { href: "/skill-gap", label: "Skill Gap", icon: "insights" },
   { href: "/roadmap", label: "Roadmap", icon: "route" },
   { href: "/learning", label: "Learning", icon: "menu_book" },

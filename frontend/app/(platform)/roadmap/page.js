@@ -6,8 +6,16 @@ import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
+import RoadmapPathHeader from "@/components/roadmap/RoadmapPathHeader";
+import RoadmapSkillPath from "@/components/roadmap/RoadmapSkillPath";
 import { useProfile } from "@/context/ProfileContext";
-import { createRoadmap, getLatestRoadmap, isNotFound, updateRoadmapProgress } from "@/lib/api";
+import {
+  createRoadmap,
+  getLatestRoadmap,
+  isNotFound,
+  updateRoadmapNodeProgress,
+  updateRoadmapProgress,
+} from "@/lib/api";
 
 const TASK_TYPE_ICON = {
   course: "play_circle",
@@ -42,6 +50,7 @@ export default function RoadmapPage() {
   const [error, setError] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [needsGap, setNeedsGap] = useState(false);
+  const [togglingNodeId, setTogglingNodeId] = useState(null);
 
   const load = async () => {
     setLoading(true);
@@ -125,6 +134,18 @@ export default function RoadmapPage() {
     }
   };
 
+  const toggleNode = async (nodeId, markingDone) => {
+    setTogglingNodeId(nodeId);
+    try {
+      const updated = await updateRoadmapNodeProgress(profileId, nodeId, markingDone);
+      setRoadmap(updated);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setTogglingNodeId(null);
+    }
+  };
+
   if (loading || generating) {
     return <LoadingState label={generating ? "Generating your roadmap..." : "Loading roadmap..."} />;
   }
@@ -152,6 +173,36 @@ export default function RoadmapPage() {
   }
 
   if (!roadmap) return null;
+
+  // New roadmaps carry a full roadmap.sh-style skill path from zero. Older
+  // roadmaps only have the legacy week accordion — keep that working as-is.
+  if (roadmap.path) {
+    return (
+      <div className="mx-auto max-w-container-max px-margin-desktop py-12">
+        <RoadmapPathHeader path={roadmap.path} progress={roadmap.progress} targetRole={profile?.target_role} />
+
+        <RoadmapSkillPath
+          path={roadmap.path}
+          progress={roadmap.progress}
+          onToggleNode={toggleNode}
+          togglingNodeId={togglingNodeId}
+        />
+
+        <div className="mt-10 flex flex-col items-center gap-4 text-center">
+          <button
+            type="button"
+            onClick={() => generateFresh({ force_replan: true })}
+            className="text-label-md text-secondary hover:text-primary hover:underline"
+          >
+            Regenerate path from latest skill gap
+          </button>
+          <Link href="/skill-gap" className="text-label-md text-secondary hover:text-primary hover:underline">
+            Back to Skill Gap Analysis
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   const completedCount = (roadmap.progress?.completed || []).length;
   const totalTasks = roadmap.weeks.reduce((sum, w) => sum + w.tasks.length, 0);

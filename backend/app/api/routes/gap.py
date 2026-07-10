@@ -11,6 +11,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+import asyncio
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import select
@@ -19,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.config import get_settings
 from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
-from app.services.roadmap import classify_gap_size, generate_roadmap
+from app.services.roadmap import classify_gap_size, generate_roadmap, generate_skill_path, seed_path_progress
 from app.services.skill_gap import compute_combined_skill_gap, compute_market_gap, generate_gap_narrative, load_gap_context
 
 router = APIRouter(prefix="/api", tags=["skill-gap"])
@@ -76,7 +78,25 @@ async def combined_gap(payload: CombinedGapRequest, db: AsyncSession = Depends(g
     include_narrative = payload.include_narrative
     if include_narrative is None:
         include_narrative = settings.gap_include_narrative_default
-    narrative = await generate_gap_narrative(gap_data, ctx.profile) if include_narrative else None
+
+    gap_size = classify_gap_size(gap_data)
+    narrative: str | None = None
+    plan = None
+    path_plan = None
+
+    if payload.run_roadmap and include_narrative:
+        narrative, plan, path_plan = await asyncio.gather(
+            generate_gap_narrative(gap_data, ctx.profile),
+            generate_roadmap(gap_data, ctx.profile, gap_size),
+            generate_skill_path(gap_data, ctx.profile, gap_size),
+        )
+    elif payload.run_roadmap:
+        plan, path_plan = await asyncio.gather(
+            generate_roadmap(gap_data, ctx.profile, gap_size),
+            generate_skill_path(gap_data, ctx.profile, gap_size),
+        )
+    elif include_narrative:
+        narrative = await generate_gap_narrative(gap_data, ctx.profile)
 
     snapshot = SkillGapSnapshot(
         profile_id=ctx.profile.id,
@@ -92,9 +112,7 @@ async def combined_gap(payload: CombinedGapRequest, db: AsyncSession = Depends(g
     await db.flush()
 
     roadmap_id: uuid.UUID | None = None
-    if payload.run_roadmap:
-        gap_size = classify_gap_size(gap_data)
-        plan = await generate_roadmap(gap_data, ctx.profile, gap_size)
+    if payload.run_roadmap and plan is not None and path_plan is not None:
         roadmap = Roadmap(
             profile_id=ctx.profile.id,
             snapshot_id=snapshot.id,
@@ -102,6 +120,8 @@ async def combined_gap(payload: CombinedGapRequest, db: AsyncSession = Depends(g
             weeks=[week.model_dump() for week in plan.weeks],
             total_weeks=plan.total_weeks,
             summary=plan.summary,
+            path=path_plan.model_dump(),
+            progress=seed_path_progress(ctx.profile, gap_data, path_plan),
             status="active",
         )
         db.add(roadmap)
