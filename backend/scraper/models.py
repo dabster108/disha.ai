@@ -12,6 +12,7 @@ JobSource = Literal[
     "jobsnepal",
     "jobejee",
     "merorojgari",
+    "kamkhoj",
 ]
 
 
@@ -24,6 +25,9 @@ class JobPosting(BaseModel):
     required_skills: list[str] = Field(default_factory=list)
     salary_range: str
     source_url: str
+    # Aggregator provenance (kamkhoj): where we discovered the job vs where it lives.
+    aggregator: str | None = None
+    original_source: str | None = None
 
 
 class JobsFile(BaseModel):

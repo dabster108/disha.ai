@@ -658,18 +658,205 @@ def _merorojgari_company(title: str, content_text: str) -> str:
 
 
 # --------------------------------------------------------------------------
+# kamkhoj — aggregator over Nepal portals (PRIMARY; see KAMKHOJ_PROBE.md)
+# Page 1 is SSR (httpx); pages 2+ render client-side (Crawl4AI). Detail pages
+# mirror the original posting incl. its canonical URL. robots.txt allows HTML
+# pages but disallows /api/ and /_next/ — we only touch allowed pages.
+# --------------------------------------------------------------------------
+
+KAMKHOJ_BASE = "https://www.kamkhoj.com"
+KAMKHOJ_JOBS = f"{KAMKHOJ_BASE}/jobs"
+KAMKHOJ_CANONICAL_RE = re.compile(
+    r'(?:rel="canonical" href|property="og:url" content)="(https?://[^"]+)"'
+)
+
+
+async def _scrape_kamkhoj(*, max_jobs: int | None = None) -> list[JobPosting]:
+    listings = await _kamkhoj_collect_listings(max_jobs=max_jobs)
+
+    headers = {"User-Agent": BROWSER_UA}
+    semaphore = asyncio.Semaphore(5)
+    async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
+
+        async def scrape_one(listing: dict) -> JobPosting:
+            async with semaphore:
+                return await _kamkhoj_detail(client, listing)
+
+        return await _gather_postings([scrape_one(listing) for listing in listings], "kamkhoj")
+
+
+async def _kamkhoj_collect_listings(*, max_jobs: int | None) -> list[dict]:
+    listings: list[dict] = []
+    seen: set[str] = set()
+
+    # Page 1 is server-rendered — plain httpx.
+    headers = {"User-Agent": BROWSER_UA}
+    async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
+        response = await client.get(KAMKHOJ_JOBS)
+        response.raise_for_status()
+        _kamkhoj_parse_cards(response.text, listings, seen)
+
+    if max_jobs is not None and len(listings) >= max_jobs:
+        return listings[:max_jobs]
+
+    # Pages 2+ only render with JS.
+    page = 2
+    while max_jobs is None or len(listings) < max_jobs:
+        html = await fetch_html(f"{KAMKHOJ_JOBS}?page={page}", wait_seconds=2.5)
+        before = len(listings)
+        _kamkhoj_parse_cards(html, listings, seen)
+        if len(listings) == before:  # no new cards -> past the last page
+            break
+        page += 1
+        await asyncio.sleep(0.5)
+
+    return listings if max_jobs is None else listings[:max_jobs]
+
+
+def _kamkhoj_parse_cards(html: str, listings: list[dict], seen: set[str]) -> None:
+    soup = BeautifulSoup(html, "html.parser")
+    for link in soup.select('a[href^="/apply/"]'):
+        href = link["href"]
+        if href in seen:
+            continue
+        seen.add(href)
+
+        card = link
+        for _ in range(6):
+            if card.parent and len(card.parent.get_text(strip=True)) < 600:
+                card = card.parent
+            else:
+                break
+
+        company_el = card.select_one('a[href^="/company/"]')
+        badge_el = company_el.find_next_sibling("span") if company_el else None
+        title_el = card.select_one("h3")
+        location_el = card.select_one('a[href^="/jobs/"]')
+        salary = ""
+        for div in card.find_all("div"):
+            classes = " ".join(div.get("class") or [])
+            if "text-2xl" in classes:
+                salary = clean_text(div.get_text(" ", strip=True))
+                break
+
+        listings.append(
+            {
+                "uuid": href.rstrip("/").rsplit("/", 1)[-1],
+                "apply_url": f"{KAMKHOJ_BASE}{href}",
+                "title": clean_text(title_el.get_text(" ", strip=True) if title_el else ""),
+                "company": clean_text(company_el.get_text(" ", strip=True) if company_el else ""),
+                "original_source": clean_text(badge_el.get_text(" ", strip=True) if badge_el else "").casefold() or None,
+                "location": clean_text(location_el.get_text(" ", strip=True) if location_el else ""),
+                "salary": salary,
+            }
+        )
+
+
+async def _kamkhoj_detail(client: httpx.AsyncClient, listing: dict) -> JobPosting:
+    response = await client.get(listing["apply_url"])
+    response.raise_for_status()
+
+    # The mirrored original page keeps its own canonical/og:url — that's the
+    # real posting URL. Anything on kamkhoj.com is KamKhoj's own meta.
+    original_url = ""
+    for candidate in KAMKHOJ_CANONICAL_RE.findall(response.text):
+        if "kamkhoj.com" not in candidate:
+            original_url = candidate
+            break
+
+    soup = BeautifulSoup(response.text, "html.parser")
+    page_text = soup.get_text("\n", strip=True)
+
+    salary_range = listing["salary"] or extract_salary_from_text(page_text)
+    if salary_range.casefold() == "negotiable":
+        salary_range = "Negotiable"
+
+    skills = merge_skills([], description=page_text)
+
+    return JobPosting(
+        id=f"kamkhoj-{listing['uuid']}",
+        source="kamkhoj",
+        title=listing["title"] or "Unknown",
+        company=listing["company"] or "Unknown",
+        location=listing["location"] or _find_nepal_city(page_text) or "Nepal",
+        required_skills=skills,
+        salary_range=salary_range or "Not disclosed",
+        source_url=original_url or listing["apply_url"],
+        aggregator="kamkhoj",
+        original_source=listing["original_source"],
+    )
+
+
+# --------------------------------------------------------------------------
+# Dedup — jobs discovered via kamkhoj AND a direct scraper share the same
+# original posting URL; keep whichever record carries more information.
+# --------------------------------------------------------------------------
+
+
+def _normalize_url(url: str) -> str:
+    parsed = urlparse(url.strip().casefold())
+    host = parsed.netloc.removeprefix("www.")
+    return f"{host}{parsed.path.rstrip('/')}"
+
+
+def _completeness(job: JobPosting) -> int:
+    score = len(job.required_skills)
+    if job.salary_range not in ("", "Not disclosed"):
+        score += 2
+    if job.location not in ("", "Nepal"):
+        score += 1
+    if job.company not in ("", "Unknown"):
+        score += 1
+    return score
+
+
+def dedupe_jobs(jobs: list[JobPosting]) -> tuple[list[JobPosting], int]:
+    """Dedupe by normalized original URL, keeping the more complete record."""
+    by_url: dict[str, JobPosting] = {}
+    order: list[str] = []
+    for job in jobs:
+        key = _normalize_url(job.source_url)
+        existing = by_url.get(key)
+        if existing is None:
+            by_url[key] = job
+            order.append(key)
+        elif _completeness(job) > _completeness(existing):
+            # Preserve aggregator provenance when the direct record wins.
+            if existing.aggregator and not job.aggregator:
+                job = job.model_copy(update={
+                    "aggregator": existing.aggregator,
+                    "original_source": existing.original_source or job.source,
+                })
+            by_url[key] = job
+    kept = [by_url[key] for key in order]
+    return kept, len(jobs) - len(kept)
+
+
+# --------------------------------------------------------------------------
 # Registry
 # --------------------------------------------------------------------------
 
 Adapter = Callable[..., Awaitable[list[JobPosting]]]
 
 SOURCES: dict[str, Adapter] = {
+    "kamkhoj": _scrape_kamkhoj,  # PRIMARY (aggregator) — see KAMKHOJ_PROBE.md
     "merojob": _scrape_merojob,
     "kumarijob": _scrape_kumarijob,
     "jobaxle": _scrape_jobaxle,
     "jobsnepal": _scrape_jobsnepal,
     "jobejee": _scrape_jobejee,
     "merorojgari": _scrape_merorojgari,
+}
+
+DIRECT_SOURCES = [name for name in SOURCES if name != "kamkhoj"]
+
+# --mode presets: aggregator = kamkhoj only; direct = the 6 portal scrapers;
+# hybrid = kamkhoj volume + merojob/kumarijob skill+salary enrichment (dedup keeps
+# the more complete record per original URL).
+MODES: dict[str, list[str]] = {
+    "aggregator": ["kamkhoj"],
+    "direct": DIRECT_SOURCES,
+    "hybrid": ["kamkhoj", "merojob", "kumarijob"],
 }
 
 

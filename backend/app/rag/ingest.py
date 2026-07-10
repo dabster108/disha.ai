@@ -8,43 +8,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 
 import chromadb
-from chromadb.utils import embedding_functions
 
 from app.config import get_settings
-from scraper.models import JobPosting, JobsFile
+from app.rag.documents import job_to_document, job_to_metadata
+from app.rag.embeddings import get_embedder
+from scraper.models import JobsFile
 
-
-def job_to_document(job: JobPosting) -> str:
-    """One chunk per job: a job posting is small enough to embed whole."""
-    skills = ", ".join(job.required_skills) if job.required_skills else "not specified"
-    return (
-        f"{job.title} at {job.company}. "
-        f"Location: {job.location}. "
-        f"Required skills: {skills}. "
-        f"Salary: {job.salary_range}."
-    )
-
-
-def job_to_metadata(job: JobPosting) -> dict:
-    return {
-        "source": job.source,
-        "title": job.title,
-        "company": job.company,
-        "location": job.location,
-        "required_skills": ", ".join(job.required_skills),
-        "salary_range": job.salary_range,
-        "source_url": job.source_url,
-    }
+logger = logging.getLogger("disha.rag.ingest")
 
 
 def get_collection(*, reset: bool = False) -> chromadb.Collection:
     settings = get_settings()
     client = chromadb.PersistentClient(path=str(settings.chroma_path))
-    embedder = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=settings.embedding_model,
-    )
+    embedder = get_embedder()
     if reset:
         try:
             client.delete_collection(settings.chroma_collection)
@@ -53,7 +32,7 @@ def get_collection(*, reset: bool = False) -> chromadb.Collection:
     return client.get_or_create_collection(
         name=settings.chroma_collection,
         embedding_function=embedder,
-        metadata={"hnsw:space": "cosine"},
+        metadata={"hnsw:space": "cosine", "embedding_model": settings.embedding_model},
     )
 
 
@@ -66,24 +45,41 @@ def ingest(*, reset: bool = False) -> int:
 
     jobs_file = JobsFile.model_validate(json.loads(settings.jobs_file.read_text(encoding="utf-8")))
     collection = get_collection(reset=reset)
+    embedder = get_embedder()
 
     jobs = jobs_file.jobs
+    documents = [job_to_document(job) for job in jobs]
+    metadatas = [job_to_metadata(job) for job in jobs]
+    embeddings = embedder.encode_documents(documents)
+
     collection.upsert(
         ids=[job.id for job in jobs],
-        documents=[job_to_document(job) for job in jobs],
-        metadatas=[job_to_metadata(job) for job in jobs],
+        documents=documents,
+        metadatas=metadatas,
+        embeddings=embeddings,
+    )
+
+    logger.info(
+        "Ingested %s jobs with model=%s into %s",
+        len(jobs),
+        settings.embedding_model,
+        settings.chroma_collection,
     )
     return len(jobs)
 
 
 def main() -> None:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     parser = argparse.ArgumentParser(description="Embed data/jobs.json into Chroma")
     parser.add_argument("--reset", action="store_true", help="Drop and rebuild the collection")
     args = parser.parse_args()
 
     count = ingest(reset=args.reset)
     settings = get_settings()
-    print(f"Ingested {count} jobs into Chroma collection '{settings.chroma_collection}' at {settings.chroma_path}")
+    print(
+        f"Ingested {count} jobs into Chroma collection '{settings.chroma_collection}' "
+        f"at {settings.chroma_path} (model: {settings.embedding_model})"
+    )
 
 
 if __name__ == "__main__":
