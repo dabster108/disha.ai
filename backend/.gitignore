@@ -1,0 +1,14 @@
+# Secrets
+.env
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+
+# Scraper + RAG artifacts
+data/
+.crawl4ai/
+
+# OS
+.DS_Store
