@@ -1,12 +1,11 @@
-"""Resume text extraction + Groq-powered skill parsing.
+"""Resume text extraction + Groq-powered CV parsing.
 
 Extraction path:
 - PDF  -> Mistral OCR 3 (handles scanned/image resumes) -> pypdf fallback
 - DOCX -> python-docx (already structured text; OCR takes only PDF/images)
 
-Skill structuring stays on Groq — OCR extracts text, Groq turns it into a
-structured skills list. The result is returned to the student for
-confirmation — never auto-saved.
+Groq structures the full CV (name, experience, education, skills). The result
+is returned to the student for confirmation — never auto-saved.
 """
 
 from __future__ import annotations
@@ -23,22 +22,51 @@ from pypdf import PdfReader
 
 from app.config import get_settings
 
-MAX_CV_CHARS = 8000
+MAX_CV_CHARS = 12000
 MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr"
 
 
+class ExperienceEntry(BaseModel):
+    title: str = Field(description="Job title or role held.")
+    company: str | None = Field(None, description="Employer or organization name.")
+    start_date: str | None = Field(None, description="Start date as written on CV, e.g. 'Jan 2023'.")
+    end_date: str | None = Field(
+        None,
+        description="End date as written on CV, or 'Present' if current role.",
+    )
+    description: str | None = Field(None, description="Brief summary of responsibilities and achievements.")
+
+
+class EducationEntry(BaseModel):
+    degree: str = Field(description="Degree or qualification, e.g. 'BCA', 'BSc Computer Science'.")
+    institution: str | None = Field(None, description="School, college, or university name.")
+    year: str | None = Field(None, description="Graduation year or date range as written on CV.")
+
+
 class ParsedCV(BaseModel):
+    full_name: str | None = Field(None, description="Candidate's full name from the CV header.")
+    email: str | None = Field(None, description="Email address if present.")
+    phone: str | None = Field(None, description="Phone number if present.")
+    summary: str | None = Field(None, description="Professional summary or objective, if present.")
+    years_of_experience: float | None = Field(
+        None,
+        description="Total years of professional experience inferred from work history.",
+    )
+    education: list[EducationEntry] = Field(
+        default_factory=list,
+        description="Education entries, most recent first.",
+    )
+    experience: list[ExperienceEntry] = Field(
+        default_factory=list,
+        description="Work experience entries, most recent first.",
+    )
     skills: list[str] = Field(
         default_factory=list,
-        description="Concrete skills the candidate demonstrably has (technologies, tools, languages, soft skills). No duplicates, no invented skills.",
+        description="Concrete skills the candidate demonstrably has. No duplicates, no invented skills.",
     )
     suggested_target_role: str | None = Field(
         None,
         description="The job role this CV is most obviously aimed at, if clear.",
-    )
-    summary: str | None = Field(
-        None,
-        description="One-sentence summary of the candidate's background.",
     )
 
 
@@ -104,13 +132,18 @@ def _llm() -> ChatGroq:
     )
 
 
-async def parse_cv_skills(cv_text: str) -> ParsedCV:
+async def parse_cv(cv_text: str) -> ParsedCV:
     structured_llm = _llm().with_structured_output(ParsedCV)
     prompt = (
         "You are a careful CV parser for a Nepali career platform. "
-        "Extract the candidate's skills from the resume text below. "
-        "Only include skills actually evidenced in the text — do not guess. "
-        "Normalize names (e.g. 'ReactJS' -> 'React').\n\n"
+        "Extract structured profile data from the resume text below. "
+        "Only include information actually present in the text — do not invent. "
+        "Normalize skill names (e.g. 'ReactJS' -> 'React'). "
+        "List experience and education most recent first.\n\n"
         f"Resume text:\n{cv_text[:MAX_CV_CHARS]}"
     )
     return await structured_llm.ainvoke(prompt)
+
+
+# Backward-compatible alias used by older imports.
+parse_cv_skills = parse_cv
