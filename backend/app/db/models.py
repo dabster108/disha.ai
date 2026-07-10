@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, Float, ForeignKey, Integer, String, Text, func
+from sqlalchemy import Boolean, DateTime, Float, ForeignKey, Integer, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB, UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -45,6 +45,8 @@ class StudentProfile(Base):
 
     user: Mapped[User | None] = relationship(back_populates="profiles")
     roadmaps: Mapped[list[Roadmap]] = relationship(back_populates="profile")
+    interview_sessions: Mapped[list[InterviewSession]] = relationship(back_populates="profile")
+    practice_sessions: Mapped[list[PracticeSession]] = relationship(back_populates="profile")
 
 
 class Roadmap(Base):
@@ -58,6 +60,110 @@ class Roadmap(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     profile: Mapped[StudentProfile] = relationship(back_populates="roadmaps")
+
+
+class InterviewSession(Base):
+    __tablename__ = "interview_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("student_profiles.id"))
+    target_role: Mapped[str] = mapped_column(String(255))
+    track: Mapped[str] = mapped_column(String(20))  # tech | nontech
+    difficulty: Mapped[str] = mapped_column(String(10))  # easy | medium | hard
+    status: Mapped[str] = mapped_column(String(20), default="started")  # started | completed
+    overall_score: Mapped[float | None] = mapped_column(Float)
+    summary: Mapped[str | None] = mapped_column(Text)
+    strengths: Mapped[list | None] = mapped_column(JSONB)
+    weaknesses: Mapped[list | None] = mapped_column(JSONB)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    profile: Mapped[StudentProfile] = relationship(back_populates="interview_sessions")
+    turns: Mapped[list[InterviewTurn]] = relationship(
+        back_populates="session",
+        order_by="InterviewTurn.turn_index",
+        cascade="all, delete-orphan",
+    )
+
+
+class InterviewTurn(Base):
+    __tablename__ = "interview_turns"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("interview_sessions.id"))
+    turn_index: Mapped[int] = mapped_column(Integer)
+    question: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str | None] = mapped_column(Text)
+    question_type: Mapped[str] = mapped_column(String(20))  # opening | technical | conceptual | scenario | behavioral
+    skill_tag: Mapped[str | None] = mapped_column(String(100))
+    difficulty: Mapped[str] = mapped_column(String(10))
+    score: Mapped[float | None] = mapped_column(Float)
+    feedback: Mapped[str | None] = mapped_column(Text)
+    dimensions: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    session: Mapped[InterviewSession] = relationship(back_populates="turns")
+
+
+class PracticeSession(Base):
+    """Skill-practice / game session — one coding or scenario challenge per chosen skill.
+
+    Distinct from InterviewSession: interviews are whole-profile adaptive Q&A;
+    practice verifies individual skills with a pass/fail threshold.
+    """
+
+    __tablename__ = "practice_sessions"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    profile_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("student_profiles.id"))
+    target_role: Mapped[str] = mapped_column(String(255))
+    track: Mapped[str] = mapped_column(String(20))  # tech | nontech
+    difficulty: Mapped[str] = mapped_column(String(10))  # easy | medium | hard
+    skills_selected: Mapped[list] = mapped_column(JSONB, default=list)
+    status: Mapped[str] = mapped_column(String(20), default="started")  # started | completed
+    overall_score: Mapped[float | None] = mapped_column(Float)
+    pass_threshold: Mapped[float] = mapped_column(Float, default=7.0)
+    verified_strong_skills: Mapped[list | None] = mapped_column(JSONB)
+    verified_weak_skills: Mapped[list | None] = mapped_column(JSONB)
+    skill_scores: Mapped[dict | None] = mapped_column(JSONB)
+    summary: Mapped[str | None] = mapped_column(Text)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    profile: Mapped[StudentProfile] = relationship(back_populates="practice_sessions")
+    challenges: Mapped[list[PracticeChallenge]] = relationship(
+        back_populates="session",
+        order_by="PracticeChallenge.challenge_index",
+        cascade="all, delete-orphan",
+    )
+
+
+class PracticeChallenge(Base):
+    __tablename__ = "practice_challenges"
+    __table_args__ = (UniqueConstraint("session_id", "challenge_index", name="uq_practice_challenge_order"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    session_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("practice_sessions.id"))
+    challenge_index: Mapped[int] = mapped_column(Integer)  # 0-based order in session
+    skill: Mapped[str] = mapped_column(String(100))
+    challenge_type: Mapped[str] = mapped_column(String(20))  # coding | scenario
+    difficulty: Mapped[str] = mapped_column(String(10))
+    prompt: Mapped[str] = mapped_column(Text)
+    starter_code: Mapped[str | None] = mapped_column(Text)
+    expected_language: Mapped[str | None] = mapped_column(String(30))  # python | javascript | sql | null
+    evaluation_hints: Mapped[list | None] = mapped_column(JSONB)
+    answer_code: Mapped[str | None] = mapped_column(Text)
+    answer_text: Mapped[str | None] = mapped_column(Text)
+    explanation: Mapped[str | None] = mapped_column(Text)
+    score: Mapped[float | None] = mapped_column(Float)
+    passed: Mapped[bool | None] = mapped_column(Boolean)
+    verified_skill_level: Mapped[str | None] = mapped_column(String(10))  # weak | partial | strong
+    feedback: Mapped[str | None] = mapped_column(Text)
+    dimensions: Mapped[dict | None] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    session: Mapped[PracticeSession] = relationship(back_populates="challenges")
 
 
 class ScrapeRun(Base):

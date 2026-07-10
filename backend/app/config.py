@@ -19,10 +19,20 @@ class Settings(BaseSettings):
     database_url: str
     mistral_api_key: str | None = None
     admin_api_key: str | None = None  # protects /api/admin/*; endpoints 503 when unset
+    google_application_credentials: str | None = None
+    google_tts_language_code: str = "en-US"
+    google_tts_voice_name: str = "en-US-Standard-C"
+    google_tts_audio_encoding: str = "MP3"
+    google_stt_language_code: str = "en-US"
 
     groq_model: str = "llama-3.1-8b-instant"
     # OCR 3 pinned explicitly — "mistral-ocr-latest" may route to OCR 4.
     mistral_ocr_model: str = "mistral-ocr-2512"
+
+    # Skill-practice / game mode
+    practice_pass_threshold: float = 7.0
+    practice_max_skills_per_session: int = 3
+    practice_groq_model: str = "llama-3.1-8b-instant"
     embedding_model: str = "BAAI/bge-small-en-v1.5"
     min_job_similarity: float = 0.42
     job_search_overfetch: int = 4
