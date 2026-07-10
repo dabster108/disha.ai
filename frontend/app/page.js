@@ -2,6 +2,7 @@ import Image from "next/image";
 import Link from "next/link";
 import MarketingFooter from "@/components/layout/MarketingFooter";
 import MarketingHeader from "@/components/layout/MarketingHeader";
+import HeroCTA from "@/components/layout/HeroCTA";
 import FadeInObserver from "@/components/ui/FadeInObserver";
 import Icon from "@/components/ui/Icon";
 
@@ -95,12 +96,11 @@ export default function Home() {
                   the gap between education and global career standards.
                 </p>
                 <div className="fade-in-up flex flex-wrap gap-6">
-                  <Link
-                    href="/dashboard"
+                  <HeroCTA
                     className="rounded-xl bg-primary px-8 py-4 text-label-md text-on-primary shadow-lg shadow-primary/10 transition-all hover:bg-on-primary-fixed-variant"
-                  >
-                    Start My Roadmap
-                  </Link>
+                    startLabel="Start My Roadmap"
+                    returningLabel="Go to Dashboard"
+                  />
                   <button
                     type="button"
                     className="rounded-xl border border-outline-variant px-8 py-4 text-label-md text-on-surface transition-all hover:bg-surface-container"
@@ -309,12 +309,11 @@ export default function Home() {
                 their future with DISHA AI.
               </p>
               <div className="relative z-10 flex flex-wrap justify-center gap-6">
-                <Link
-                  href="/dashboard"
+                <HeroCTA
                   className="rounded-xl bg-primary px-10 py-5 text-label-md font-bold text-on-primary transition-all hover:scale-[1.02] hover:bg-primary-container"
-                >
-                  Create Free Profile
-                </Link>
+                  startLabel="Create Free Profile"
+                  returningLabel="Go to Dashboard"
+                />
                 <button
                   type="button"
                   className="rounded-xl border border-outline-variant px-10 py-5 text-label-md text-on-surface transition-all hover:bg-surface-container-low"

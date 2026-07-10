@@ -1,165 +1,141 @@
-import Icon from "@/components/ui/Icon";
+"use client";
 
-const jobs = [
-  {
-    company: "Leapfrog Technology",
-    letter: "L",
-    title: "Senior Frontend Engineer",
-    match: 96,
-    location: "Kathmandu, NP",
-    salary: "NPR 180k - 250k /mo",
-    experience: "3+ years",
-    missing: ["Docker"],
-    insight: "Completing Docker Basics will increase your match from 84% to 93%.",
-  },
-  {
-    company: "Fusemachines",
-    letter: "F",
-    title: "Frontend Developer (React)",
-    match: 92,
-    location: "Remote / Lalitpur",
-    salary: "NPR 120k - 180k /mo",
-    experience: "1-3 years",
-    missing: ["Next.js SSR"],
-    insight: "Completing the Next.js Workshop will make you an Excellent match.",
-    highlight: true,
-  },
-  {
-    company: "Cotiviti",
-    letter: "C",
-    title: "React Developer",
-    match: 88,
-    location: "Kathmandu, NP",
-    salary: "NPR 100k - 150k /mo",
-    experience: "2+ years",
-    missing: ["TypeScript", "Testing"],
-    insight: "Your TypeScript progress is on track — 2 more modules to unlock.",
-  },
-  {
-    company: "Deerwalk",
-    letter: "D",
-    title: "Junior Frontend Developer",
-    match: 94,
-    location: "Lalitpur, NP",
-    salary: "NPR 80k - 120k /mo",
-    experience: "0-1 years",
-    missing: [],
-    insight: "You're an excellent match! Apply now to secure this opportunity.",
-  },
-];
+import { useEffect, useState } from "react";
+import Icon from "@/components/ui/Icon";
+import LoadingState from "@/components/ui/LoadingState";
+import EmptyState from "@/components/ui/EmptyState";
+import ErrorBanner from "@/components/ui/ErrorBanner";
+import { useProfile } from "@/context/ProfileContext";
+import { matchJobs } from "@/lib/api";
+
+function MatchBadge({ score, label }) {
+  const tone =
+    score >= 90
+      ? "bg-primary text-on-primary"
+      : score >= 75
+        ? "bg-primary/15 text-primary"
+        : score >= 60
+          ? "bg-surface-container-high text-on-surface"
+          : "bg-tertiary-fixed text-on-tertiary-fixed";
+
+  return (
+    <div className="text-right">
+      <span className={`inline-block rounded-full px-4 py-1.5 text-headline-md font-bold ${tone}`}>
+        {score}%
+      </span>
+      <p className="mt-1 text-xs font-bold uppercase tracking-wider text-secondary">{label}</p>
+    </div>
+  );
+}
 
 export default function JobsPage() {
+  const { profileId, profile } = useProfile();
+  const [data, setData] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  const load = async () => {
+    if (!profileId) return;
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await matchJobs(profileId);
+      setData(result);
+    } catch (err) {
+      setError(err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileId]);
+
+  if (loading) return <LoadingState label="Finding relevant job matches..." />;
+
+  const jobs = data?.matches || [];
+
   return (
     <div className="min-h-screen p-12">
-      <header className="mb-12 mask-reveal">
+      <header className="mb-8 mask-reveal">
         <h1 className="text-display-lg text-on-surface">Job Matches</h1>
         <p className="mt-2 max-w-2xl text-body-lg text-secondary">
-          Continuously scanned from Nepal&apos;s job market with AI-powered
-          compatibility scoring.
+          Precision-ranked postings for{" "}
+          <span className="font-bold text-on-surface">{profile?.target_role}</span> — scored across
+          skills, role fit, seniority, domain, and location.
         </p>
       </header>
 
-      <div className="mb-8 flex flex-wrap items-center gap-4">
-        <div className="flex gap-2 rounded-lg bg-surface-container-low p-1">
-          <button
-            type="button"
-            className="rounded-md bg-white px-4 py-2 text-label-md font-bold text-primary shadow-sm"
-          >
-            Best Match
-          </button>
-          <button type="button" className="px-4 py-2 text-label-md text-secondary">
-            Recent
-          </button>
-          <button type="button" className="px-4 py-2 text-label-md text-secondary">
-            Saved
-          </button>
+      {error && (
+        <div className="mb-8">
+          <ErrorBanner message={error.message} onRetry={load} />
         </div>
-        <span className="ml-auto text-label-md text-secondary">
-          42 jobs matching your profile
-        </span>
-      </div>
+      )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {jobs.map((job) => (
-          <div
-            key={job.title}
-            className="card-hover flex flex-col overflow-hidden rounded-2xl border border-outline-variant bg-white transition-all"
-          >
-            <div className="flex-1 space-y-5 p-8">
-              <div className="flex items-start justify-between">
-                <div className="flex gap-4">
-                  <div
-                    className={`flex h-14 w-14 items-center justify-center rounded-xl bg-surface-container-low text-2xl font-bold ${job.highlight ? "text-primary" : ""}`}
-                  >
-                    {job.letter}
-                  </div>
+      {!error && jobs.length === 0 ? (
+        <EmptyState
+          icon="work_outline"
+          title="No strong matches right now"
+          description="We only show jobs that pass strict relevance thresholds — no weak filler. Try broadening your skills, updating your target role, or checking back after the job corpus refreshes."
+          actionLabel="Update Profile"
+          actionHref="/onboarding"
+        />
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
+          {jobs.map((job) => (
+            <div
+              key={job.id || `${job.title}-${job.company}`}
+              className="card-hover flex flex-col overflow-hidden rounded-2xl border border-outline-variant bg-white transition-all"
+            >
+              <div className="flex-1 space-y-5 p-8">
+                <div className="flex items-start justify-between gap-4">
                   <div>
                     <h3 className="text-headline-md font-bold">{job.title}</h3>
                     <p className="text-body-md text-secondary">{job.company}</p>
+                    {job.location && (
+                      <p className="mt-1 flex items-center gap-1 text-sm text-secondary">
+                        <Icon name="location_on" size={14} />
+                        {job.location}
+                      </p>
+                    )}
                   </div>
+                  <MatchBadge score={job.match_score} label={job.match_label} />
                 </div>
-                <div className="text-right">
-                  <span className="rounded-full bg-primary/10 px-4 py-1.5 text-headline-md font-bold text-primary">
-                    {job.match}%
-                  </span>
-                  <p className="mt-1 text-label-sm uppercase text-secondary">
-                    Match
-                  </p>
-                </div>
-              </div>
-              <div className="flex flex-wrap gap-4 text-label-md text-secondary">
-                <span className="flex items-center gap-1.5">
-                  <Icon name="location_on" size={18} />
-                  {job.location}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <Icon name="payments" size={18} />
-                  {job.salary}
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <Icon name="work_history" size={18} />
-                  {job.experience}
-                </span>
-              </div>
-              {job.missing.length > 0 && (
-                <div className="space-y-2">
-                  <p className="text-label-sm font-bold uppercase tracking-wider text-secondary">
-                    Missing Skills
-                  </p>
-                  <div className="flex flex-wrap gap-2">
-                    {job.missing.map((s) => (
-                      <span
-                        key={s}
-                        className="rounded-md border border-error/10 bg-error/5 px-3 py-1 text-label-md text-error"
-                      >
-                        {s}
-                      </span>
+
+                {(job.explanation?.positives?.length > 0 || job.explanation?.negatives?.length > 0) && (
+                  <div className="space-y-3 rounded-xl border border-outline-variant/50 bg-surface-container-lowest p-4">
+                    {job.explanation.positives?.map((item) => (
+                      <p key={item} className="flex items-start gap-2 text-sm text-primary">
+                        <Icon name="check_circle" size={16} className="mt-0.5 shrink-0" />
+                        {item}
+                      </p>
+                    ))}
+                    {job.explanation.negatives?.map((item) => (
+                      <p key={item} className="flex items-start gap-2 text-sm text-secondary">
+                        <Icon name="remove_circle_outline" size={16} className="mt-0.5 shrink-0" />
+                        {item}
+                      </p>
                     ))}
                   </div>
-                </div>
-              )}
-              <div className="flex items-start gap-3 rounded-xl border-l-4 border-primary bg-surface-container-low p-4">
-                <Icon name="auto_awesome" className="text-primary" filled />
-                <p className="text-sm text-secondary">{job.insight}</p>
+                )}
+              </div>
+              <div className="border-t border-outline-variant bg-surface-container-low/50 p-6">
+                <a
+                  href={job.source_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center gap-2 rounded-xl bg-primary py-3 font-bold text-white hover:bg-primary-container"
+                >
+                  View Posting
+                  <Icon name="open_in_new" size={18} />
+                </a>
               </div>
             </div>
-            <div className="flex gap-4 border-t border-outline-variant bg-surface-container-low/50 p-6">
-              <button
-                type="button"
-                className="flex-1 rounded-xl bg-primary py-3 font-bold text-white hover:bg-primary-container"
-              >
-                Apply Now
-              </button>
-              <button
-                type="button"
-                className="rounded-xl border border-outline-variant px-4 py-3 hover:bg-white"
-              >
-                <Icon name="bookmark" />
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

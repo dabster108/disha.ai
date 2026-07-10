@@ -1,4 +1,5 @@
 import { Geist, Geist_Mono } from "next/font/google";
+import { ProfileProvider } from "@/context/ProfileContext";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -30,7 +31,7 @@ export default function RootLayout({ children }) {
         />
       </head>
       <body className="flex min-h-full flex-col bg-background text-on-surface">
-        {children}
+        <ProfileProvider>{children}</ProfileProvider>
       </body>
     </html>
   );
