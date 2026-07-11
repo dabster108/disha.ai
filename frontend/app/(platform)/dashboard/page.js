@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import FadeInObserver from "@/components/ui/FadeInObserver";
 import { useProfile } from "@/context/ProfileContext";
 import {
   selectJourneyState,
@@ -105,7 +106,7 @@ export default function DashboardPage() {
   };
 
   return (
-    <div className="mx-auto max-w-7xl space-y-10 p-6 md:p-12">
+    <FadeInObserver className="mx-auto max-w-7xl space-y-10 p-6 md:p-12">
       {/* Hero + journey ring + smart CTA */}
       <section className="mask-reveal">
         <div className="grid grid-cols-1 gap-8 lg:grid-cols-12 lg:items-center">
@@ -144,7 +145,7 @@ export default function DashboardPage() {
       </section>
 
       {/* Key stats */}
-      <section className="grid grid-cols-2 gap-4 md:gap-6 lg:grid-cols-4">
+      <section className="fade-in-up grid grid-cols-2 gap-4 md:gap-6 lg:grid-cols-4">
         <StatCard
           icon="analytics"
           label="Readiness"
@@ -188,30 +189,34 @@ export default function DashboardPage() {
       </section>
 
       {/* Full analytics */}
-      <AnalyticsSection
-        readinessTrend={readinessTrend}
-        readinessDelta={readinessDelta}
-        interviewTrend={selectInterviewTrend(data)}
-        interviewDelta={selectInterviewDelta(data)}
-        practiceTrend={selectPracticeTrend(data)}
-        practiceDelta={selectPracticeDelta(data)}
-        matchRatioTrend={selectMatchRatioTrend(data)}
-        skillBreakdown={selectSkillBreakdown(data)}
-        hasGap={Boolean(gapData)}
-        activityFeed={selectActivityFeed(data)}
-        summary={analyticsSummary}
-        interviewAvg={interviewAvg}
-        practiceAvg={practiceAvg}
-      />
+      <div className="fade-in-up">
+        <AnalyticsSection
+          readinessTrend={readinessTrend}
+          readinessDelta={readinessDelta}
+          interviewTrend={selectInterviewTrend(data)}
+          interviewDelta={selectInterviewDelta(data)}
+          practiceTrend={selectPracticeTrend(data)}
+          practiceDelta={selectPracticeDelta(data)}
+          matchRatioTrend={selectMatchRatioTrend(data)}
+          skillBreakdown={selectSkillBreakdown(data)}
+          hasGap={Boolean(gapData)}
+          activityFeed={selectActivityFeed(data)}
+          summary={analyticsSummary}
+          interviewAvg={interviewAvg}
+          practiceAvg={practiceAvg}
+        />
+      </div>
 
-      <ScoreRankSection
-        yourRank={leaderboard?.your_rank}
-        totalEntries={leaderboard?.entries?.length}
-        categoryScores={yourEntry?.category_scores}
-      />
+      <div className="fade-in-up">
+        <ScoreRankSection
+          yourRank={leaderboard?.your_rank}
+          totalEntries={leaderboard?.entries?.length}
+          categoryScores={yourEntry?.category_scores}
+        />
+      </div>
 
       {/* Roadmap + skill gap snapshot */}
-      <section className="grid grid-cols-1 gap-6 lg:grid-cols-5">
+      <section className="fade-in-up grid grid-cols-1 gap-6 lg:grid-cols-5">
         <div className="lg:col-span-3">
           <h3 className="mb-3 text-headline-sm font-bold text-on-surface">Current Week</h3>
           <RoadmapWeekCard roadmap={data?.roadmap} progress={roadmapState} />
@@ -229,7 +234,7 @@ export default function DashboardPage() {
       </section>
 
       {/* Job matches */}
-      <section className="space-y-4">
+      <section className="fade-in-up space-y-4">
         <div className="flex items-end justify-between">
           <div>
             <h3 className="text-headline-sm font-bold text-on-surface">Job Matches For You</h3>
@@ -271,10 +276,10 @@ export default function DashboardPage() {
       </section>
 
       {/* Quick navigation */}
-      <section className="space-y-4">
+      <section className="fade-in-up space-y-4">
         <h3 className="text-headline-sm font-bold text-on-surface">Quick Navigation</h3>
         <QuickLinksRow steps={journey?.steps || []} />
       </section>
-    </div>
+    </FadeInObserver>
   );
 }

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Icon from "@/components/ui/Icon";
 
 const DWELL_THRESHOLD_MS = 45_000;
@@ -188,7 +189,7 @@ export default function InAppResourceViewer({ resource, onClose, onComplete, com
     await onComplete?.(resource);
   };
 
-  return (
+  return createPortal(
     <div
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onClick={onClose}
@@ -283,6 +284,7 @@ export default function InAppResourceViewer({ resource, onClose, onComplete, com
           </div>
         )}
       </div>
-    </div>
+    </div>,
+    document.body
   );
 }
