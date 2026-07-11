@@ -6,7 +6,7 @@ import { CAREER_ROLES, filterCareerRoles } from "@/lib/careerRoles";
 
 export default function CareerRoleInput({
   onSelect,
-  onCancel,
+  onCancel = undefined,
   exclude = [],
   placeholder = "Search roles…",
   inline = false,

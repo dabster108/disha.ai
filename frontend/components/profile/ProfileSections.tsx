@@ -301,7 +301,7 @@ export function CareerGoalSection({ data, onChange }: SectionProps) {
           {editing ? (
             <CareerRoleInput
               inline
-              onSelect={(role) => setDraft({ ...draft, dreamJob: role })}
+              onSelect={(role: string) => setDraft({ ...draft, dreamJob: role })}
               placeholder="Search roles (e.g. Backend Developer)"
             />
           ) : (

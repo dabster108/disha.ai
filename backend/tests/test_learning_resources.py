@@ -71,13 +71,118 @@ def test_normalize_resource_does_not_override_explicit_consume():
     assert normalized["content_md"] == "hello"
 
 
-def test_build_resources_for_skill_still_works_for_roadmap():
-    # Unaffected by the Learning-panel changes — used by attach_resources_to_weeks.
-    resources = lr.build_resources_for_skill("python")
+_ALREADY_GOOD_RESOURCE = {"title": "x", "url": "y", "consume": "embed"}
+# Stale data from before the in-app-only contract — a non-empty list whose
+# entries are all external deep-links (consume=None), which must not be
+# mistaken for "already fine" and left in place.
+_STALE_RESOURCE = {"title": "x — video tutorials", "url": "https://www.youtube.com/results?search_query=x", "consume": None}
+
+
+def test_attach_resources_to_path_fills_empty_node_resources(monkeypatch):
+    monkeypatch.setattr(lr, "get_settings", lambda: SimpleNamespace(mcp_enabled=False))
+    path = {
+        "phases": [
+            {
+                "id": "p1",
+                "title": "Foundations",
+                "nodes": [
+                    {"id": "n1", "skill": "python", "title": "Python", "resources": []},
+                    {"id": "n2", "skill": "python", "title": "Python", "resources": [_ALREADY_GOOD_RESOURCE]},
+                ],
+            }
+        ]
+    }
+    changed = asyncio.run(lr.attach_resources_to_path(path))
+    assert changed is True
+    # Empty node gets backfilled with the curated catalog video — never a
+    # dead-end external link, per the in-app-only contract.
+    resources = path["phases"][0]["nodes"][0]["resources"]
     assert resources
-    assert any(r["consume"] == "embed" for r in resources)
-    # Search deep-links are still present for the roadmap queue (opened in a new tab there).
-    assert any(r["consume"] is None for r in resources)
+    assert all(r["consume"] in ("embed", "markdown") for r in resources)
+    # Already-consumable node is left untouched (idempotent).
+    assert path["phases"][0]["nodes"][1]["resources"] == [_ALREADY_GOOD_RESOURCE]
+
+
+def test_attach_resources_to_path_is_idempotent_when_nothing_missing():
+    path = {"phases": [{"nodes": [{"skill": "python", "resources": [_ALREADY_GOOD_RESOURCE]}]}]}
+    assert asyncio.run(lr.attach_resources_to_path(path)) is False
+
+
+def test_attach_resources_to_path_regenerates_stale_external_only_resources(monkeypatch):
+    # A non-empty list is not enough to skip regeneration — if every entry is
+    # a non-in-app deep-link (pre-dating this feature), it must be replaced.
+    monkeypatch.setattr(lr, "get_settings", lambda: SimpleNamespace(mcp_enabled=False))
+    path = {"phases": [{"nodes": [{"skill": "python", "resources": [_STALE_RESOURCE]}]}]}
+    changed = asyncio.run(lr.attach_resources_to_path(path))
+    assert changed is True
+    resources = path["phases"][0]["nodes"][0]["resources"]
+    assert resources
+    assert all(r["consume"] in ("embed", "markdown") for r in resources)
+
+
+def test_attach_resources_to_path_regenerates_mixed_stale_and_good_resources(monkeypatch):
+    # Regression: a real bug found live — the curated catalog video sits
+    # alongside a stale search-page entry from before this feature existed.
+    # Any non-consumable entry must trigger a full regeneration, not just a
+    # fully-stale list, since the UI might pick any entry to show.
+    monkeypatch.setattr(lr, "get_settings", lambda: SimpleNamespace(mcp_enabled=False))
+    path = {"phases": [{"nodes": [{"skill": "python", "resources": [_STALE_RESOURCE, _ALREADY_GOOD_RESOURCE]}]}]}
+    changed = asyncio.run(lr.attach_resources_to_path(path))
+    assert changed is True
+    resources = path["phases"][0]["nodes"][0]["resources"]
+    assert resources
+    assert all(r["consume"] in ("embed", "markdown") for r in resources)
+
+
+def test_attach_resources_to_path_handles_none_and_empty():
+    assert asyncio.run(lr.attach_resources_to_path(None)) is False
+    assert asyncio.run(lr.attach_resources_to_path({})) is False
+
+
+def test_attach_resources_to_path_leaves_unknown_skill_empty_not_external(monkeypatch):
+    # No catalog match and MCP disabled — must not fall back to an external
+    # search-page link; empty is the correct result. Explicitly forced off
+    # here rather than relying on ambient env config (a real deployment may
+    # have MCP_ENABLED=true).
+    monkeypatch.setattr(lr, "get_settings", lambda: SimpleNamespace(mcp_enabled=False))
+    path = {"phases": [{"nodes": [{"skill": "some-skill-not-in-catalog", "resources": []}]}]}
+    asyncio.run(lr.attach_resources_to_path(path))
+    assert path["phases"][0]["nodes"][0]["resources"] == []
+
+
+def test_attach_resources_to_weeks_fills_empty_task_resources(monkeypatch):
+    monkeypatch.setattr(lr, "get_settings", lambda: SimpleNamespace(mcp_enabled=False))
+    weeks = [
+        {
+            "week": 1,
+            "theme": "Foundations",
+            "tasks": [
+                {"skill": "python", "title": "Learn Python", "resources": []},
+                {"skill": "python", "title": "Already done", "resources": [_ALREADY_GOOD_RESOURCE]},
+            ],
+        }
+    ]
+    changed = asyncio.run(lr.attach_resources_to_weeks(weeks))
+    assert changed is True
+    resources = weeks[0]["tasks"][0]["resources"]
+    assert resources
+    assert all(r["consume"] in ("embed", "markdown") for r in resources)
+    assert weeks[0]["tasks"][1]["resources"] == [_ALREADY_GOOD_RESOURCE]
+
+
+def test_attach_resources_to_weeks_is_idempotent_when_nothing_missing():
+    weeks = [{"week": 1, "tasks": [{"skill": "python", "resources": [_ALREADY_GOOD_RESOURCE]}]}]
+    assert asyncio.run(lr.attach_resources_to_weeks(weeks)) is False
+
+
+def test_attach_resources_to_weeks_regenerates_stale_external_only_resources(monkeypatch):
+    monkeypatch.setattr(lr, "get_settings", lambda: SimpleNamespace(mcp_enabled=False))
+    weeks = [{"week": 1, "tasks": [{"skill": "python", "resources": [_STALE_RESOURCE]}]}]
+    changed = asyncio.run(lr.attach_resources_to_weeks(weeks))
+    assert changed is True
+    resources = weeks[0]["tasks"][0]["resources"]
+    assert resources
+    assert all(r["consume"] in ("embed", "markdown") for r in resources)
 
 
 def test_async_build_resources_mcp_disabled_returns_only_catalog_youtube(monkeypatch):

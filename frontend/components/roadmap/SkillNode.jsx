@@ -2,6 +2,8 @@
 
 import { useState } from "react";
 import Icon from "@/components/ui/Icon";
+import InAppResourceViewer from "@/components/learning/InAppResourceViewer";
+import { resolveResourceConsume } from "@/lib/resourceConsume";
 
 const RESOURCE_ICON = {
   video: "play_circle",
@@ -18,13 +20,29 @@ const RESOURCE_ICON = {
  *  - active     -> the recommended next step, pulsing highlight
  *  - upcoming   -> neutral but still clickable — soft progression, nothing
  *    is locked behind prerequisites.
+ *
+ * Resources open in-app (video embed / docs markdown) — never a new tab —
+ * so dwell time can actually be tracked; studying one long enough offers to
+ * mark the whole node complete via the same onToggle the checkbox uses.
  */
-export default function SkillNode({ node, autoCompleted, onToggle, isToggling, onResourceOpen }) {
+export default function SkillNode({ node, autoCompleted, onToggle, isToggling }) {
   const [open, setOpen] = useState(false);
+  const [activeResource, setActiveResource] = useState(null);
+  const [completingResource, setCompletingResource] = useState(false);
   const status = node.status || "upcoming";
   const isCompleted = status === "completed";
   const isActive = status === "active";
   const resources = node.resources || [];
+
+  const handleResourceStudied = async () => {
+    setCompletingResource(true);
+    try {
+      await onToggle(node.id, true);
+      setActiveResource(null);
+    } finally {
+      setCompletingResource(false);
+    }
+  };
 
   return (
     <div
@@ -78,36 +96,50 @@ export default function SkillNode({ node, autoCompleted, onToggle, isToggling, o
           {autoCompleted && <p className="mb-3 text-xs font-semibold text-primary">Auto-checked: {autoCompleted.reason}</p>}
           {resources.length > 0 && (
             <div className="space-y-2">
-              {resources.map((res) => (
-                <a
-                  key={res.url}
-                  href={res.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  onClick={() => onResourceOpen?.(res)}
-                  className="flex items-center gap-3 rounded-lg border border-outline-variant bg-surface-container-lowest p-3 transition-colors hover:bg-surface-container-low"
-                >
-                  <Icon name={RESOURCE_ICON[res.type] || "link"} size={18} className="shrink-0 text-primary" />
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-on-surface">{res.title}</p>
-                    <p className="truncate text-xs text-secondary">
-                      {res.provider}
-                      {res.duration ? ` • ${res.duration}` : ""}
-                    </p>
-                  </div>
-                  <span
-                    className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-                      res.cost === "paid" ? "bg-tertiary-fixed text-on-tertiary-fixed" : "bg-primary/10 text-primary"
+              {resources.map((res) => {
+                const resolved = resolveResourceConsume(res);
+                const openable = resolved.consume === "embed" || resolved.consume === "markdown";
+                return (
+                  <button
+                    key={res.url}
+                    type="button"
+                    disabled={!openable}
+                    onClick={() => openable && setActiveResource(resolved)}
+                    className={`flex w-full items-center gap-3 rounded-lg border border-outline-variant bg-surface-container-lowest p-3 text-left transition-colors ${
+                      openable ? "hover:bg-surface-container-low" : "cursor-not-allowed opacity-50"
                     }`}
                   >
-                    {res.cost}
-                  </span>
-                </a>
-              ))}
+                    <Icon name={RESOURCE_ICON[res.type] || "link"} size={18} className="shrink-0 text-primary" />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold text-on-surface">{res.title}</p>
+                      <p className="truncate text-xs text-secondary">
+                        {res.provider}
+                        {res.duration ? ` • ${res.duration}` : ""}
+                        {!openable ? " • unavailable in-app" : ""}
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                        res.cost === "paid" ? "bg-tertiary-fixed text-on-tertiary-fixed" : "bg-primary/10 text-primary"
+                      }`}
+                    >
+                      {res.cost}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           )}
         </div>
       )}
+
+      <InAppResourceViewer
+        key={activeResource?.url ?? "no-resource"}
+        resource={activeResource}
+        onClose={() => setActiveResource(null)}
+        onComplete={handleResourceStudied}
+        completing={completingResource}
+      />
     </div>
   );
 }

@@ -34,6 +34,8 @@ _LIBRARY_ID_RE = re.compile(r"/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]
 # Cheap heuristics for pulling {title, url} pairs out of a DuckDuckGo MCP
 # tool's response, whose exact shape varies by server implementation.
 _MARKDOWN_LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^\s)]+)\)")
+# "1. Some Title\n   URL: https://..." — the format duckduckgo-mcp-server uses.
+_NUMBERED_RESULT_RE = re.compile(r"^\s*\d+\.\s*(.+?)\s*\n\s*URL:\s*(\S+)", re.MULTILINE)
 _BARE_URL_RE = re.compile(r"https?://[^\s)>\]]+")
 
 _CONTENT_MD_MAX_CHARS = 10_000
@@ -145,6 +147,11 @@ def _parse_search_results(raw: Any) -> list[dict]:
     if results:
         return results
 
+    for title, url in _NUMBERED_RESULT_RE.findall(text):
+        results.append({"title": title.strip(), "url": url.strip()})
+    if results:
+        return results
+
     for url in _BARE_URL_RE.findall(text):
         results.append({"title": url, "url": url.strip()})
     return results
@@ -174,12 +181,19 @@ async def search_learning_web(query: str) -> list[dict]:
 
 
 def _extract_library_id(raw: Any) -> str | None:
+    # Only trust a dict field if its value actually looks like a library ID —
+    # response envelopes (e.g. langchain's message wrapper) have their own
+    # unrelated "id" field that would otherwise false-match here.
     if isinstance(raw, dict):
-        for key in ("id", "libraryId", "context7CompatibleLibraryID"):
-            if isinstance(raw.get(key), str):
-                return raw[key]
-    if isinstance(raw, list) and raw:
-        return _extract_library_id(raw[0])
+        for key in ("libraryId", "context7CompatibleLibraryID", "id"):
+            value = raw.get(key)
+            if isinstance(value, str) and _LIBRARY_ID_RE.fullmatch(value):
+                return value
+    if isinstance(raw, list):
+        for item in raw:
+            found = _extract_library_id(item)
+            if found:
+                return found
     match = _LIBRARY_ID_RE.search(_stringify(raw))
     return match.group(0) if match else None
 
@@ -198,9 +212,15 @@ async def fetch_library_docs(library: str, topic: str | None = None) -> dict | N
     if resolve_tool is None or docs_tool is None:
         return None
 
+    task_query = topic or f"learn {library}: getting started"
+
     library_arg = _match_arg_name(resolve_tool, "library", "name") or "libraryName"
+    resolve_args = {library_arg: library}
+    resolve_query_arg = _match_arg_name(resolve_tool, "query")
+    if resolve_query_arg:
+        resolve_args[resolve_query_arg] = task_query
     try:
-        resolved = await _invoke(resolve_tool, {library_arg: library})
+        resolved = await _invoke(resolve_tool, resolve_args)
     except Exception:
         logger.warning("mcp: context7 resolve-library-id failed for %r", library, exc_info=True)
         return None
@@ -211,9 +231,12 @@ async def fetch_library_docs(library: str, topic: str | None = None) -> dict | N
 
     docs_id_arg = _match_arg_name(docs_tool, "id", "library") or "context7CompatibleLibraryID"
     docs_args = {docs_id_arg: library_id}
-    topic_arg = _match_arg_name(docs_tool, "topic")
-    if topic and topic_arg:
-        docs_args[topic_arg] = topic
+    # Some Context7-compatible servers call this "topic", others "query" — either
+    # way it's typically required, so always send something rather than only
+    # when a caller-supplied topic exists.
+    docs_query_arg = _match_arg_name(docs_tool, "topic", "query")
+    if docs_query_arg:
+        docs_args[docs_query_arg] = task_query
 
     try:
         raw_docs = await _invoke(docs_tool, docs_args)

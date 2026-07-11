@@ -30,7 +30,7 @@ const CATEGORY_BY_SKILL = {
   communication: "Soft Skills",
 };
 
-/** @param {string} name @returns {string} */
+/** @param {string} name @returns {import("@/types/profile").SkillCategory} */
 export function inferSkillCategory(name) {
   const key = normalizeSkillKey(name).replace(/\s+/g, "");
   return CATEGORY_BY_SKILL[key] || "Frameworks";

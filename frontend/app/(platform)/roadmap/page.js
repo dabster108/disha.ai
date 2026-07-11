@@ -8,8 +8,8 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 import RoadmapPathHeader from "@/components/roadmap/RoadmapPathHeader";
 import RoadmapSkillPath from "@/components/roadmap/RoadmapSkillPath";
-import StudyTrackerChip from "@/components/learning/StudyTrackerChip";
-import { useResourceStudyTracker } from "@/hooks/useResourceStudyTracker";
+import InAppResourceViewer from "@/components/learning/InAppResourceViewer";
+import { resolveResourceConsume } from "@/lib/resourceConsume";
 import { useProfile } from "@/context/ProfileContext";
 import {
   createRoadmap,
@@ -56,6 +56,8 @@ export default function RoadmapPage() {
   const [generating, setGenerating] = useState(false);
   const [needsGap, setNeedsGap] = useState(false);
   const [togglingNodeId, setTogglingNodeId] = useState(null);
+  const [activeResource, setActiveResource] = useState(null);
+  const [completingResource, setCompletingResource] = useState(false);
 
   const load = async () => {
     if (!profileId) return;
@@ -152,31 +154,25 @@ export default function RoadmapPage() {
     }
   };
 
-  // Open a learning resource in a new tab, track dwell time, and mark
-  // progress complete on confirm or manual "Mark done" — instead of
-  // requiring a blind manual checkbox click for every resource.
-  const studyTracker = useResourceStudyTracker({
-    onComplete: async (tracked) => {
-      if (tracked.nodeId) {
-        await toggleNode(tracked.nodeId, true);
-      } else if (tracked.week != null) {
-        await toggleResource(tracked.week, tracked.taskIndex, tracked.resourceIndex, true);
-      }
-    },
-  });
-
-  const openNodeResource = (node, resource) => {
-    studyTracker.startTracking({ key: `node:${node.id}`, title: resource.title, nodeId: node.id });
+  // Task resources (legacy week format) open in-app; studying one long
+  // enough offers to mark it complete via the same toggleResource the
+  // manual checkbox uses.
+  const openTaskResource = (week, taskIndex, resourceIndex, resource) => {
+    setActiveResource({
+      resource: resolveResourceConsume(resource),
+      onDone: () => toggleResource(week, taskIndex, resourceIndex, true),
+    });
   };
 
-  const openTaskResource = (week, taskIndex, resourceIndex, resource) => {
-    studyTracker.startTracking({
-      key: `task:${week}:${taskIndex}:${resourceIndex}`,
-      title: resource.title,
-      week,
-      taskIndex,
-      resourceIndex,
-    });
+  const handleResourceStudied = async () => {
+    if (!activeResource) return;
+    setCompletingResource(true);
+    try {
+      await activeResource.onDone();
+      setActiveResource(null);
+    } finally {
+      setCompletingResource(false);
+    }
   };
 
   if ((loading && !roadmap) || generating) {
@@ -219,7 +215,6 @@ export default function RoadmapPage() {
           progress={roadmap.progress}
           onToggleNode={toggleNode}
           togglingNodeId={togglingNodeId}
-          onResourceOpen={openNodeResource}
         />
 
         <div className="mt-10 flex flex-col items-center gap-4 text-center">
@@ -234,15 +229,6 @@ export default function RoadmapPage() {
             Back to Skill Gap Analysis
           </Link>
         </div>
-
-        <StudyTrackerChip
-          active={studyTracker.active}
-          pendingConfirm={studyTracker.pendingConfirm}
-          onMarkDone={studyTracker.markDoneNow}
-          onDismiss={studyTracker.dismiss}
-          onConfirmYes={studyTracker.confirmYes}
-          onConfirmNo={studyTracker.confirmNo}
-        />
       </div>
     );
   }
@@ -396,6 +382,8 @@ export default function RoadmapPage() {
                             <div className="mt-4 space-y-2 pl-10">
                               {resources.map((res, ri) => {
                                 const resDone = isResourceDone(roadmap.progress, week.week, i, ri);
+                                const resolved = resolveResourceConsume(res);
+                                const openable = resolved.consume === "embed" || resolved.consume === "markdown";
                                 return (
                                   <div
                                     key={`${res.url}-${ri}`}
@@ -418,12 +406,11 @@ export default function RoadmapPage() {
                                       size={18}
                                       className={resDone ? "text-green-600" : "text-primary"}
                                     />
-                                    <a
-                                      href={res.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      onClick={() => !resDone && openTaskResource(week.week, i, ri, res)}
-                                      className="flex-1 min-w-0"
+                                    <button
+                                      type="button"
+                                      disabled={!openable}
+                                      onClick={() => openable && !resDone && openTaskResource(week.week, i, ri, res)}
+                                      className={`min-w-0 flex-1 text-left ${openable ? "" : "cursor-not-allowed opacity-50"}`}
                                     >
                                       <p className={`truncate text-sm font-semibold ${resDone ? "text-secondary line-through" : "text-on-surface hover:text-primary"}`}>
                                         {res.title}
@@ -433,8 +420,9 @@ export default function RoadmapPage() {
                                         {res.duration ? ` • ${res.duration}` : ""}
                                         {" • "}
                                         <span className="uppercase">{res.type}</span>
+                                        {!openable ? " • unavailable in-app" : ""}
                                       </p>
-                                    </a>
+                                    </button>
                                     <span
                                       className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
                                         res.cost === "paid"
@@ -444,15 +432,6 @@ export default function RoadmapPage() {
                                     >
                                       {res.cost}
                                     </span>
-                                    <a
-                                      href={res.url}
-                                      target="_blank"
-                                      rel="noopener noreferrer"
-                                      className="shrink-0 text-secondary hover:text-primary"
-                                      title="Open resource"
-                                    >
-                                      <Icon name="open_in_new" size={16} />
-                                    </a>
                                   </div>
                                 );
                               })}
@@ -475,13 +454,12 @@ export default function RoadmapPage() {
         </Link>
       </div>
 
-      <StudyTrackerChip
-        active={studyTracker.active}
-        pendingConfirm={studyTracker.pendingConfirm}
-        onMarkDone={studyTracker.markDoneNow}
-        onDismiss={studyTracker.dismiss}
-        onConfirmYes={studyTracker.confirmYes}
-        onConfirmNo={studyTracker.confirmNo}
+      <InAppResourceViewer
+        key={activeResource?.resource?.url ?? "no-resource"}
+        resource={activeResource?.resource}
+        onClose={() => setActiveResource(null)}
+        onComplete={handleResourceStudied}
+        completing={completingResource}
       />
     </div>
   );

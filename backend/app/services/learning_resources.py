@@ -1,24 +1,26 @@
-"""Real learning-resource layer for the roadmap.
+"""Real learning-resource layer for the roadmap and learning curriculum.
 
-Turns a roadmap task's target skill into concrete, clickable internet
-resources (video / article / docs / course) with metadata the UI can render:
-title, url, provider (channel/site), type, cost (free/paid), and duration.
+Turns a target skill into concrete, real, in-app-consumable resources — never
+a link that redirects the student out of DISHA, since leaving the app means
+losing dwell-time progress tracking. Every resource returned here has
+``consume`` set to either ``"embed"`` (a real YouTube video, playable inline)
+or ``"markdown"`` (Context7 docs, rendered inline) — nothing else is ever
+attached to a task/node/module.
 
-Two sources, in priority order:
-    1. A hand-curated catalog of high-signal, stable links per skill.
-    2. Deterministic search deep-links (YouTube / freeCodeCamp / official docs)
-       so *every* skill — even ones not in the catalog — still gets working
-       links. No network call, no API key required.
+Priority order, per skill:
+    1. Curated catalog YouTube videos (embed) — no network call, always available.
+    2. If ``MCP_ENABLED``: Context7 docs for the skill (markdown).
+    3. If ``MCP_ENABLED`` and no video yet: DuckDuckGo-searched YouTube videos (embed).
 
-An optional YouTube Data API path (``fetch_youtube_videos``) enriches videos
-with real titles/channels/durations when ``YOUTUBE_API_KEY`` is configured;
-it is never required for the roadmap to work.
+If none of these produce anything (MCP disabled and the skill isn't in the
+curated catalog), the skill simply gets no resources — the UI shows "no
+resource yet" rather than a dead-end external link.
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
-import urllib.parse
 
 from app.config import get_settings
 from app.services.mcp_client import fetch_library_docs, search_learning_web
@@ -219,70 +221,12 @@ def _budget_allows_paid(budget: str | None) -> bool:
     return "free" not in budget.strip().casefold()
 
 
-def _search_fallbacks(skill: str) -> list[dict]:
-    q_video = urllib.parse.quote_plus(f"{skill} tutorial")
-    q_plain = urllib.parse.quote_plus(skill)
-    return [
-        {
-            "title": f"{skill} — video tutorials",
-            "url": f"https://www.youtube.com/results?search_query={q_video}",
-            "provider": "YouTube",
-            "type": "video",
-            "cost": "free",
-            "duration": None,
-        },
-        {
-            "title": f"{skill} — articles & guides",
-            "url": f"https://www.freecodecamp.org/news/search/?query={q_plain}",
-            "provider": "freeCodeCamp",
-            "type": "article",
-            "cost": "free",
-            "duration": None,
-        },
-    ]
-
-
-def build_resources_for_skill(skill: str, *, budget: str | None = "free", limit: int = 3) -> list[dict]:
-    """Return up to ``limit`` real, clickable resources for a single skill.
-
-    Curated links come first (respecting budget for paid options), then
-    deterministic search deep-links so there is always something to click.
-    """
-    allow_paid = _budget_allows_paid(budget)
-    key = normalize_skill_name(skill)
-
-    resources: list[dict] = []
-    for entry in _CATALOG.get(key, []):
-        if entry["cost"] == "paid" and not allow_paid:
-            continue
-        resources.append(normalize_resource(dict(entry)))
-
-    for fallback in _search_fallbacks(skill):
-        resources.append(normalize_resource(fallback))
-
-    seen: set[str] = set()
-    unique: list[dict] = []
-    for r in resources:
-        if r["url"] in seen:
-            continue
-        seen.add(r["url"])
-        unique.append(r)
-
-    return unique[:limit]
-
-
 async def async_build_resources_for_skill(skill: str, *, budget: str | None = "free", limit: int = 3) -> list[dict]:
-    """Learning-panel resource builder: only returns resources the in-app
-    viewer can open directly (YouTube embed or Context7 markdown) — never
-    search-page deep-links, since the Learning panel never redirects a
-    student out of the app.
-
-    Priority order:
-        1. Curated catalog YouTube videos (embed).
-        2. If MCP is enabled: Context7 docs for this skill (markdown).
-        3. If MCP is enabled and no video found yet: DuckDuckGo-searched
-           YouTube tutorials (embed).
-    """
+    """The one resource builder for every student-facing surface (roadmap
+    tasks/nodes, learning-curriculum modules). Only returns resources the
+    in-app viewer can open directly (YouTube embed or Context7 markdown) —
+    never a search-page or docs-site deep-link, since nothing here may ever
+    send the student out of the app (see module docstring)."""
     allow_paid = _budget_allows_paid(budget)
     key = normalize_skill_name(skill)
 
@@ -334,20 +278,61 @@ async def async_build_resources_for_skill(skill: str, *, budget: str | None = "f
     return unique
 
 
-def attach_resources_to_weeks(weeks: list[dict], *, budget: str | None = "free") -> bool:
+def _needs_regeneration(resources: list[dict] | None) -> bool:
+    """True if ``resources`` is empty, or (legacy data predating the
+    in-app-only contract) contains even one entry the Learning viewer can't
+    open in-app — e.g. an old search-page/docs-site deep-link with
+    ``consume: None`` sitting alongside a still-good catalog video. Every
+    persisted resource list must be fully consumable, never a mix, since the
+    UI may pick any entry to show first."""
+    if not resources:
+        return True
+    return not all(r.get("consume") in ("embed", "markdown") for r in resources)
+
+
+async def attach_resources_to_weeks(weeks: list[dict], *, budget: str | None = "free") -> bool:
     """Backfill ``resources`` onto each task in an already-serialized plan.
 
-    Returns True if anything was added (so callers can decide to persist).
-    Idempotent: tasks that already have resources are left untouched.
+    Returns True if anything changed (so callers can decide to persist).
+    Idempotent once every task has at least one in-app-consumable resource.
+    Looked up concurrently so backfilling an entire plan costs one round
+    trip's worth of latency, not one per task.
     """
-    changed = False
-    for week in weeks or []:
-        for task in week.get("tasks", []) or []:
-            if task.get("resources"):
-                continue
-            skill = task.get("skill") or week.get("theme") or ""
-            if not skill:
-                continue
-            task["resources"] = build_resources_for_skill(skill, budget=budget)
-            changed = True
-    return changed
+    pending = [
+        task
+        for week in weeks or []
+        for task in week.get("tasks", []) or []
+        if _needs_regeneration(task.get("resources")) and (task.get("skill") or week.get("theme"))
+    ]
+    if not pending:
+        return False
+    skills = [task.get("skill") or "" for task in pending]
+    results = await asyncio.gather(*(async_build_resources_for_skill(skill, budget=budget) for skill in skills))
+    for task, resources in zip(pending, results):
+        task["resources"] = resources
+    return True
+
+
+async def attach_resources_to_path(path: dict | None, *, budget: str | None = "free") -> bool:
+    """Backfill ``resources`` onto each node of an already-serialized skill path.
+
+    Mirrors ``attach_resources_to_weeks`` for the roadmap.sh-style path format —
+    roadmaps generated before a node's resources existed (or where generation
+    silently produced none) would otherwise have a permanently dead "Open"
+    button, since the skill-path format has no other backfill path.
+    """
+    if not path:
+        return False
+    pending = [
+        node
+        for phase in path.get("phases", []) or []
+        for node in phase.get("nodes", []) or []
+        if _needs_regeneration(node.get("resources")) and (node.get("skill") or node.get("title"))
+    ]
+    if not pending:
+        return False
+    skills = [node.get("skill") or node.get("title") or "" for node in pending]
+    results = await asyncio.gather(*(async_build_resources_for_skill(skill, budget=budget) for skill in skills))
+    for node, resources in zip(pending, results):
+        node["resources"] = resources
+    return True

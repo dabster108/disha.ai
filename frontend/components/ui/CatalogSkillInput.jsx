@@ -9,6 +9,9 @@ import {
   resolveCatalogSkill,
 } from "@/lib/skills-catalog";
 
+/**
+ * @param {{ exclude?: string[], onAdd: (skill: string) => void, onCancel?: () => void, placeholder?: string }} props
+ */
 export default function CatalogSkillInput({ exclude = [], onAdd, onCancel, placeholder = "Type a skill…" }) {
   const [draft, setDraft] = useState("");
   const [open, setOpen] = useState(false);

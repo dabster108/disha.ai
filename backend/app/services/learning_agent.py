@@ -6,9 +6,11 @@ Pipeline (gather → write → attach resources):
    ``app.orchestrator.tools.learning``).
 2. One structured Mistral call writes in-app lessons (explanation, steps,
    examples, mini-checks) tailored to that student — not generic blurbs.
-3. For each module skill, ``get_learning_resources_tool`` / 
-   ``build_resources_for_skill`` attaches real curated + search deep-links
-   (never LLM-invented URLs). Budget filters paid options.
+3. For each module skill, ``get_learning_resources_tool`` /
+   ``async_build_resources_for_skill`` attaches real, in-app-consumable
+   resources — YouTube embeds or Context7 docs, never LLM-invented URLs and
+   never a link that redirects the student out of the app. Budget filters
+   paid options.
 
 Falls back to a short deterministic skeleton if the LLM call fails.
 """

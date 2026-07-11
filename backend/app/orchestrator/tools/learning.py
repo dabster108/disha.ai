@@ -5,9 +5,10 @@ lookup — so the curriculum agent (or any future agent) reads the same ground
 truth as the rest of the app.
 
 Lesson prose (explanation/steps/examples/mini-checks) is written by the LLM.
-Real clickable resources are attached via ``get_learning_resources_tool`` /
-``build_resources_for_skill`` — curated catalog + search deep-links, never
-LLM-invented URLs.
+Real, in-app-consumable resources are attached via ``get_learning_resources_tool``
+/ ``async_build_resources_for_skill`` — curated catalog videos, plus MCP
+(Context7 docs, DuckDuckGo-searched videos) when enabled — never LLM-invented
+URLs and never a link that redirects the student out of the app.
 """
 
 from __future__ import annotations

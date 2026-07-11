@@ -8,6 +8,7 @@ in exactly one place.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from functools import lru_cache
@@ -20,7 +21,7 @@ from app.config import get_settings
 from app.rag.documents import infer_role_category
 from app.services.skill_gap import normalize_skill_name, slim_gap_for_llm
 from app.db.models import StudentProfile
-from app.services.learning_resources import build_resources_for_skill
+from app.services.learning_resources import async_build_resources_for_skill
 from app.services.llm_utils import call_structured
 
 GapSize = Literal["large", "small"]
@@ -48,6 +49,12 @@ class RoadmapResource(BaseModel):
     type: Literal["video", "article", "docs", "course", "practice"]
     cost: Literal["free", "paid"]
     duration: str | None = None
+    # In-app consumption (app.services.learning_resources.normalize_resource) —
+    # optional since these predate the Learning panel and stay unset for
+    # resources that can only be opened as an external deep-link.
+    embed_url: str | None = None
+    consume: Literal["embed", "markdown"] | None = None
+    content_md: str | None = None
 
 
 class RoadmapTask(BaseModel):
@@ -133,15 +140,16 @@ def _fallback_roadmap(gap_data: dict, profile: StudentProfile, gap_size: GapSize
     )
 
 
-def _attach_resources(plan: RoadmapPlan, budget: str | None) -> RoadmapPlan:
-    """Fill each task's `resources` with real, clickable links for its skill."""
-    for week in plan.weeks:
-        for task in week.tasks:
-            if not task.resources:
-                task.resources = [
-                    RoadmapResource(**r)
-                    for r in build_resources_for_skill(task.skill, budget=budget)
-                ]
+async def _attach_resources(plan: RoadmapPlan, budget: str | None) -> RoadmapPlan:
+    """Fill each task's `resources` with real, in-app-consumable resources for
+    its skill. Looked up concurrently — sequentially awaiting one skill at a
+    time would multiply MCP's per-call latency across every task in the plan."""
+    pending = [task for week in plan.weeks for task in week.tasks if not task.resources]
+    results = await asyncio.gather(
+        *(async_build_resources_for_skill(task.skill, budget=budget) for task in pending)
+    )
+    for task, resources in zip(pending, results):
+        task.resources = [RoadmapResource(**r) for r in resources]
     return plan
 
 
@@ -170,7 +178,7 @@ async def generate_roadmap(gap_data: dict, profile: StudentProfile, gap_size: Ga
     )
     result = await call_structured(_llm(), RoadmapPlan, prompt)
     plan = result if result is not None else _fallback_roadmap(gap_data, profile, gap_size, time_per_week)
-    return _attach_resources(plan, profile.budget)
+    return await _attach_resources(plan, profile.budget)
 
 
 # --------------------------------------------------------------------------
@@ -293,6 +301,9 @@ class SkillPathResource(BaseModel):
     type: Literal["video", "article", "docs", "course", "practice"]
     cost: Literal["free", "paid"]
     duration: str | None = None
+    embed_url: str | None = None
+    consume: Literal["embed", "markdown"] | None = None
+    content_md: str | None = None
 
 
 class SkillPathNode(BaseModel):
@@ -427,11 +438,15 @@ def _ensure_skeleton_coverage(plan: SkillPathPlan, ladder: list[tuple[str, list[
     return plan.model_copy(update={"phases": [extra_phase, *plan.phases]})
 
 
-def _attach_path_resources(plan: SkillPathPlan, budget: str | None) -> SkillPathPlan:
-    for phase in plan.phases:
-        for node in phase.nodes:
-            if not node.resources:
-                node.resources = [SkillPathResource(**r) for r in build_resources_for_skill(node.skill, budget=budget)]
+async def _attach_path_resources(plan: SkillPathPlan, budget: str | None) -> SkillPathPlan:
+    """Same concurrency reasoning as ``_attach_resources`` — a full skill path
+    can have dozens of nodes, so resolve them all in parallel, not one at a time."""
+    pending = [node for phase in plan.phases for node in phase.nodes if not node.resources]
+    results = await asyncio.gather(
+        *(async_build_resources_for_skill(node.skill, budget=budget) for node in pending)
+    )
+    for node, resources in zip(pending, results):
+        node.resources = [SkillPathResource(**r) for r in resources]
     return plan
 
 

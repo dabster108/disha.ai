@@ -9,6 +9,7 @@ wants a plan from data that's already been assessed.
 from __future__ import annotations
 
 import asyncio
+import copy
 import uuid
 from datetime import datetime
 
@@ -20,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.config import get_settings
 from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
-from app.services.learning_resources import attach_resources_to_weeks
+from app.services.learning_resources import attach_resources_to_path, attach_resources_to_weeks
 from app.services.roadmap import classify_gap_size, generate_roadmap, generate_skill_path, seed_path_progress
 from app.services.skill_gap import compute_combined_skill_gap, load_gap_context
 
@@ -183,11 +184,20 @@ async def create_roadmap(payload: RoadmapRequest, db: AsyncSession = Depends(get
 
 @router.get("/roadmap/{profile_id}", response_model=RoadmapOut)
 async def latest_roadmap(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> Roadmap:
+    # FOR UPDATE: the backfill below can be slow (MCP round trips per skill)
+    # and reads-then-writes the whole weeks/path column. Without a row lock,
+    # two concurrent GETs for the same roadmap (a real scenario — the
+    # frontend polls this endpoint) can both read the stale pre-migration
+    # data, and whichever commits last silently reverts the other's freshly
+    # regenerated resources back to the old external-only ones. Cheap once
+    # migrated, since a fully up-to-date roadmap has nothing left to backfill
+    # and returns almost immediately.
     result = await db.execute(
         select(Roadmap)
         .where(Roadmap.profile_id == profile_id)
         .order_by(Roadmap.created_at.desc())
         .limit(1)
+        .with_for_update()
     )
     roadmap = result.scalar_one_or_none()
     if roadmap is None:
@@ -197,9 +207,21 @@ async def latest_roadmap(profile_id: uuid.UUID, db: AsyncSession = Depends(get_d
     # existed, so the UI always has clickable cards. Persist once.
     profile = await db.get(StudentProfile, profile_id)
     budget = profile.budget if profile else "free"
-    weeks = list(roadmap.weeks or [])
-    if attach_resources_to_weeks(weeks, budget=budget):
-        roadmap.weeks = weeks
+    # Deep copies, not shallow — attach_resources_to_weeks/_to_path mutate
+    # nested task/node dicts in place. A shallow copy shares those nested
+    # dicts with the ORM's tracked "before" value, so the mutation silently
+    # changes both sides and SQLAlchemy's history sees no net change and
+    # skips writing the column entirely (the backfill computes correctly
+    # but the UPDATE never happens).
+    weeks = copy.deepcopy(roadmap.weeks) if roadmap.weeks else []
+    weeks_changed = await attach_resources_to_weeks(weeks, budget=budget)
+    path = copy.deepcopy(roadmap.path) if roadmap.path else None
+    path_changed = await attach_resources_to_path(path, budget=budget)
+    if weeks_changed or path_changed:
+        if weeks_changed:
+            roadmap.weeks = weeks
+        if path_changed:
+            roadmap.path = path
         await db.commit()
         await db.refresh(roadmap)
     return _roadmap_out(roadmap)
