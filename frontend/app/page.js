@@ -7,6 +7,7 @@ import Icon from "@/components/ui/Icon";
 import logo from "@/components/images/logo.png";
 import roadmapShot from "@/components/images/roadmap.png";
 import HeroShowcase from "@/components/marketing/HeroShowcaseLoader";
+import HowItWorksSection from "@/components/marketing/HowItWorksSection";
 import PricingSection from "@/components/marketing/PricingSection";
 
 const institutions = [
@@ -15,27 +16,6 @@ const institutions = [
   "NCELL",
   "DEERWALK",
   "LEAPFROG",
-];
-
-const steps = [
-  {
-    icon: "explore",
-    title: "Discover",
-    description:
-      "Advanced psychometric AI profiling to understand your core strengths and latent potential.",
-  },
-  {
-    icon: "auto_stories",
-    title: "Learn",
-    description:
-      "Personalized curriculum paths that bridge your current skills with industry requirements.",
-  },
-  {
-    icon: "work",
-    title: "Get Hired",
-    description:
-      "Direct pipelines to top employers in Nepal and abroad who value your verified skills.",
-  },
 ];
 
 const features = [
@@ -182,36 +162,7 @@ export default function Home() {
             </div>
           </section>
 
-          {/* How it works */}
-          <section id="how-it-works" className="mx-auto max-w-container-max px-margin-mobile py-section-gap md:px-margin-desktop">
-            <div className="fade-in-up mb-16 flex flex-col items-end justify-between gap-8 md:flex-row">
-              <div className="max-w-xl space-y-4">
-                <span className="text-label-sm uppercase tracking-widest text-primary">How it works</span>
-                <h2 className="text-headline-lg">
-                  Your journey to mastery, simplified into three core stages.
-                </h2>
-              </div>
-              <p className="max-w-sm text-body-md text-secondary">
-                We take the guesswork out of professional growth by providing a
-                clear, actionable path forward.
-              </p>
-            </div>
-            <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
-              {steps.map((step, i) => (
-                <div
-                  key={step.title}
-                  className="card-hover group fade-in-up rounded-2xl border border-outline-variant bg-surface-container-lowest p-10 transition-all duration-300 hover:border-primary/30"
-                  style={{ transitionDelay: `${i * 100}ms` }}
-                >
-                  <div className="mb-8 flex h-12 w-12 items-center justify-center rounded-lg bg-primary-fixed text-primary transition-colors group-hover:bg-primary group-hover:text-on-primary">
-                    <Icon name={step.icon} />
-                  </div>
-                  <h3 className="mb-3 text-headline-md">{step.title}</h3>
-                  <p className="text-body-md text-secondary">{step.description}</p>
-                </div>
-              ))}
-            </div>
-          </section>
+          <HowItWorksSection />
 
           {/* Adaptive roadmap */}
           <section className="overflow-hidden bg-surface-bright py-section-gap">

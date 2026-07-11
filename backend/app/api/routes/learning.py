@@ -22,7 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.db.models import LearningCurriculum, Roadmap, StudentProfile
 from app.orchestrator.tools.learning import get_roadmap_skeleton_tool
-from app.services.learning_agent import generate_curriculum
+from app.services.learning_agent import generate_curriculum, is_fallback_curriculum_summary
 from app.services.skill_gap import get_or_create_current_snapshot
 
 router = APIRouter(prefix="/api/learning", tags=["learning"])
@@ -72,7 +72,7 @@ async def generate(payload: GenerateRequest, db: AsyncSession = Depends(get_db))
                 .limit(1)
             )
         ).scalar_one_or_none()
-        if existing is not None:
+        if existing is not None and not is_fallback_curriculum_summary(existing.summary):
             return existing
 
     # get_or_create_current_snapshot recomputes if the latest snapshot was
@@ -115,8 +115,11 @@ async def latest(profile_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> L
             .limit(1)
         )
     ).scalar_one_or_none()
-    if curriculum is None:
-        raise HTTPException(status_code=404, detail="No curriculum yet — POST /api/learning/generate first.")
+    if curriculum is None or is_fallback_curriculum_summary(curriculum.summary):
+        raise HTTPException(
+            status_code=404,
+            detail="No curriculum yet — POST /api/learning/generate first.",
+        )
     return curriculum
 
 

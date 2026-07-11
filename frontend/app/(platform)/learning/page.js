@@ -421,6 +421,15 @@ export default function LearningPage() {
     setError(null);
     try {
       const data = await generateCurriculum(profileId, force);
+      if (data.summary?.startsWith("A starter curriculum from your top priority skills")) {
+        setError(
+          new Error(
+            "Full lesson generation failed — your roadmap queue is still available below. Wait a minute and click Regenerate."
+          )
+        );
+        setMode("roadmap");
+        return;
+      }
       writeCache(curriculumKey, data, CACHE_TTL.curriculum);
       setCurriculum(data);
       setMode("curriculum");

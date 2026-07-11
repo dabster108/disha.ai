@@ -146,6 +146,17 @@ async def _fallback_curriculum(
     }
 
 
+FALLBACK_SUMMARY_PREFIX = "A starter curriculum from your top priority skills"
+
+
+def is_fallback_curriculum_summary(summary: str | None) -> bool:
+    return bool(summary and summary.startswith(FALLBACK_SUMMARY_PREFIX))
+
+
+def is_fallback_curriculum_plan(plan: dict) -> bool:
+    return is_fallback_curriculum_summary(plan.get("summary"))
+
+
 def _format_priority_block(priority_skills: list[dict]) -> str:
     lines = []
     for p in priority_skills[:10]:

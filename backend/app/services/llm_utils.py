@@ -9,10 +9,13 @@ surfaces as a 500 to the student.
 
 from __future__ import annotations
 
+import logging
 from typing import TypeVar
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
@@ -30,7 +33,10 @@ async def call_structured(llm: BaseChatModel, schema: type[T], prompt: str, *, a
         try:
             result = await structured.ainvoke(prompt)
         except Exception:
+            logger.warning("Structured LLM call failed (attempt %s/%s)", attempt + 1, attempts, exc_info=True)
             result = None
         if result is not None:
             return result
+        if result is None and attempt < attempts - 1:
+            logger.info("Structured LLM returned no tool output (attempt %s/%s) — retrying", attempt + 1, attempts)
     return None

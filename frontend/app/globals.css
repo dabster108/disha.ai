@@ -448,3 +448,17 @@ body {
     transform: translate(3%, 2%) scale(1.06);
   }
 }
+
+.career-pulse-node {
+  animation: career-pulse-node 2s ease-in-out infinite;
+}
+
+@keyframes career-pulse-node {
+  0%,
+  100% {
+    box-shadow: 0 0 30px #0050cb, 0 0 60px rgba(0, 80, 203, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 50px #0050cb, 0 0 100px #0050cb;
+  }
+}
