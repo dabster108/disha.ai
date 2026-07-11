@@ -17,14 +17,57 @@ it is never required for the roadmap to work.
 
 from __future__ import annotations
 
+import re
 import urllib.parse
 
+from app.config import get_settings
+from app.services.mcp_client import fetch_library_docs, search_learning_web
 from app.services.skill_gap import normalize_skill_name
 
 # A resource dict shape:
-#   {title, url, provider, type, cost, duration}
+#   {title, url, provider, type, cost, duration, embed_url, consume, content_md}
 #   type ∈ {"video","article","docs","course","practice"}
 #   cost ∈ {"free","paid"}
+#   consume ∈ {"embed","markdown",None} — what the in-app Learning viewer can
+#       open directly; None means it's a deep-link the Learning panel won't
+#       attach (only the roadmap queue, which still opens links in a new tab).
+
+_YOUTUBE_ID_RE = re.compile(
+    r"(?:youtube\.com/(?:watch\?(?:.*&)?v=|embed/|shorts/)|youtu\.be/)([A-Za-z0-9_-]{6,})"
+)
+
+
+def youtube_video_id(url: str | None) -> str | None:
+    if not url:
+        return None
+    match = _YOUTUBE_ID_RE.search(url)
+    return match.group(1) if match else None
+
+
+def youtube_embed_url(video_id: str) -> str:
+    return f"https://www.youtube.com/embed/{video_id}"
+
+
+def is_youtube_url(url: str | None) -> bool:
+    return youtube_video_id(url) is not None
+
+
+def normalize_resource(resource: dict) -> dict:
+    """Fill in embed_url/consume/content_md for a resource dict that doesn't
+    already declare them. Never overwrites an explicit ``consume`` (e.g.
+    Context7 docs resources from ``mcp_client`` already set it)."""
+    resource.setdefault("embed_url", None)
+    resource.setdefault("content_md", None)
+    if resource.get("consume"):
+        return resource
+
+    video_id = youtube_video_id(resource.get("url")) if resource.get("type") == "video" else None
+    if video_id:
+        resource["embed_url"] = youtube_embed_url(video_id)
+        resource["consume"] = "embed"
+    else:
+        resource["consume"] = None
+    return resource
 
 _CATALOG: dict[str, list[dict]] = {
     "python": [
@@ -212,10 +255,10 @@ def build_resources_for_skill(skill: str, *, budget: str | None = "free", limit:
     for entry in _CATALOG.get(key, []):
         if entry["cost"] == "paid" and not allow_paid:
             continue
-        resources.append(dict(entry))
+        resources.append(normalize_resource(dict(entry)))
 
     for fallback in _search_fallbacks(skill):
-        resources.append(fallback)
+        resources.append(normalize_resource(fallback))
 
     seen: set[str] = set()
     unique: list[dict] = []
@@ -226,6 +269,69 @@ def build_resources_for_skill(skill: str, *, budget: str | None = "free", limit:
         unique.append(r)
 
     return unique[:limit]
+
+
+async def async_build_resources_for_skill(skill: str, *, budget: str | None = "free", limit: int = 3) -> list[dict]:
+    """Learning-panel resource builder: only returns resources the in-app
+    viewer can open directly (YouTube embed or Context7 markdown) — never
+    search-page deep-links, since the Learning panel never redirects a
+    student out of the app.
+
+    Priority order:
+        1. Curated catalog YouTube videos (embed).
+        2. If MCP is enabled: Context7 docs for this skill (markdown).
+        3. If MCP is enabled and no video found yet: DuckDuckGo-searched
+           YouTube tutorials (embed).
+    """
+    allow_paid = _budget_allows_paid(budget)
+    key = normalize_skill_name(skill)
+
+    resources: list[dict] = []
+    for entry in _CATALOG.get(key, []):
+        if entry["cost"] == "paid" and not allow_paid:
+            continue
+        normalized = normalize_resource(dict(entry))
+        if normalized["consume"] == "embed":
+            resources.append(normalized)
+
+    settings = get_settings()
+    if settings.mcp_enabled:
+        docs = await fetch_library_docs(skill)
+        if docs:
+            resources.append(normalize_resource(docs))
+
+        if not any(r["type"] == "video" for r in resources):
+            found = await search_learning_web(f"{skill} tutorial site:youtube.com")
+            for item in found:
+                url = item.get("url") or ""
+                if not is_youtube_url(url):
+                    continue
+                resources.append(
+                    normalize_resource(
+                        {
+                            "title": item.get("title") or f"{skill} tutorial",
+                            "url": url,
+                            "provider": "YouTube",
+                            "type": "video",
+                            "cost": "free",
+                            "duration": None,
+                        }
+                    )
+                )
+
+    seen: set[str] = set()
+    unique: list[dict] = []
+    for r in resources:
+        if r["consume"] not in ("embed", "markdown"):
+            continue
+        if r["url"] in seen:
+            continue
+        seen.add(r["url"])
+        unique.append(r)
+        if len(unique) >= limit:
+            break
+
+    return unique
 
 
 def attach_resources_to_weeks(weeks: list[dict], *, budget: str | None = "free") -> bool:

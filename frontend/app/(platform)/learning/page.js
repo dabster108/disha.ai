@@ -19,7 +19,9 @@ import {
 import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 import StudyTrackerChip from "@/components/learning/StudyTrackerChip";
 import LessonModule from "@/components/learning/LessonModule";
+import InAppResourceViewer from "@/components/learning/InAppResourceViewer";
 import { useResourceStudyTracker } from "@/hooks/useResourceStudyTracker";
+import { resolveResourceConsume } from "@/lib/resourceConsume";
 
 const RESOURCE_ICON = {
   video: "play_circle",
@@ -164,6 +166,8 @@ function CurriculumView({ profileId, curriculum, setCurriculum, onRegenerate, re
 function RoadmapQueueView({ profile, profileId, roadmap, setRoadmap }) {
   const [toggling, setToggling] = useState(null);
   const [error, setError] = useState(null);
+  const [activeResource, setActiveResource] = useState(null);
+  const [completingResource, setCompletingResource] = useState(false);
 
   const isPathBased = Boolean(roadmap?.path);
   const nodeQueue = useMemo(() => buildNodeQueue(roadmap), [roadmap]);
@@ -201,6 +205,21 @@ function RoadmapQueueView({ profile, profileId, roadmap, setRoadmap }) {
       else if (tracked.taskItem) await toggleTask(tracked.taskItem, true);
     },
   });
+
+  const openInAppResource = (resource, onDone) => {
+    setActiveResource({ resource: resolveResourceConsume(resource), onDone });
+  };
+
+  const handleResourceStudied = async () => {
+    if (!activeResource) return;
+    setCompletingResource(true);
+    try {
+      await activeResource.onDone();
+      setActiveResource(null);
+    } finally {
+      setCompletingResource(false);
+    }
+  };
 
   const queueLength = isPathBased ? nodeQueue.length : taskQueue.length;
   if (!roadmap || queueLength === 0) {
@@ -247,6 +266,8 @@ function RoadmapQueueView({ profile, profileId, roadmap, setRoadmap }) {
           ? nodeQueue.map((item) => {
               const isToggling = toggling === item.node.id;
               const firstResource = item.node.resources?.[0];
+              const resolved = firstResource ? resolveResourceConsume(firstResource) : null;
+              const openable = resolved?.consume === "embed" || resolved?.consume === "markdown";
               return (
                 <div key={item.node.id} className={`card-hover flex items-center gap-4 rounded-2xl border bg-white p-5 transition-all ${item.isCompleted ? "border-outline-variant opacity-70" : "border-outline-variant"}`}>
                   <button type="button" onClick={() => toggleNode(item)} disabled={isToggling} aria-label={item.isCompleted ? "Mark incomplete" : "Mark complete"} className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors ${item.isCompleted ? "bg-primary text-on-primary" : "border-2 border-dashed border-outline-variant text-outline hover:border-primary"}`}>
@@ -257,7 +278,13 @@ function RoadmapQueueView({ profile, profileId, roadmap, setRoadmap }) {
                     <p className="text-body-md font-semibold text-on-surface">{item.node.title || item.node.skill}</p>
                     {item.node.description && <p className="text-sm text-secondary line-clamp-1">{item.node.description}</p>}
                   </div>
-                  {firstResource?.url && (
+                  {firstResource?.url && openable && (
+                    <button type="button" onClick={() => openInAppResource(firstResource, () => toggleNode(item, true))} className="flex shrink-0 items-center gap-1 rounded-xl bg-primary px-4 py-2 text-label-md font-bold text-on-primary hover:bg-primary-container">
+                      <Icon name={RESOURCE_ICON[firstResource.type] || "menu_book"} size={18} />
+                      Open
+                    </button>
+                  )}
+                  {firstResource?.url && !openable && (
                     <a href={firstResource.url} target="_blank" rel="noopener noreferrer" onClick={() => studyTracker.startTracking({ key: `node:${item.node.id}`, title: firstResource.title, nodeItem: item })} className="flex shrink-0 items-center gap-1 rounded-xl bg-primary px-4 py-2 text-label-md font-bold text-on-primary hover:bg-primary-container">
                       <Icon name={RESOURCE_ICON[firstResource.type] || "menu_book"} size={18} />
                       Open
@@ -270,6 +297,8 @@ function RoadmapQueueView({ profile, profileId, roadmap, setRoadmap }) {
               const isDone = item.resource ? item.resourceComplete : item.taskComplete;
               const key = `${item.week}:${item.taskIndex}:${item.resourceIndex ?? "task"}`;
               const isToggling = toggling === key;
+              const resolved = item.resource ? resolveResourceConsume(item.resource) : null;
+              const openable = resolved?.consume === "embed" || resolved?.consume === "markdown";
               return (
                 <div key={key} className={`card-hover flex items-center gap-4 rounded-2xl border bg-white p-5 transition-all ${isDone ? "border-outline-variant opacity-70" : "border-outline-variant"}`}>
                   <button type="button" onClick={() => toggleTask(item)} disabled={isToggling} aria-label={isDone ? "Mark incomplete" : "Mark complete"} className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors ${isDone ? "bg-primary text-on-primary" : "border-2 border-dashed border-outline-variant text-outline hover:border-primary"}`}>
@@ -286,7 +315,13 @@ function RoadmapQueueView({ profile, profileId, roadmap, setRoadmap }) {
                       <p className="text-body-md font-semibold text-on-surface">{item.task.title || item.task.skill}</p>
                     )}
                   </div>
-                  {item.resource?.url && (
+                  {item.resource?.url && openable && (
+                    <button type="button" onClick={() => openInAppResource(item.resource, () => toggleTask(item, true))} className="flex shrink-0 items-center gap-1 rounded-xl bg-primary px-4 py-2 text-label-md font-bold text-on-primary hover:bg-primary-container">
+                      <Icon name={RESOURCE_ICON[item.resource.type] || "menu_book"} size={18} />
+                      Open
+                    </button>
+                  )}
+                  {item.resource?.url && !openable && (
                     <a href={item.resource.url} target="_blank" rel="noopener noreferrer" onClick={() => studyTracker.startTracking({ key, title: item.resource.title, taskItem: item })} className="flex shrink-0 items-center gap-1 rounded-xl bg-primary px-4 py-2 text-label-md font-bold text-on-primary hover:bg-primary-container">
                       <Icon name={RESOURCE_ICON[item.resource.type] || "menu_book"} size={18} />
                       Open
@@ -298,6 +333,14 @@ function RoadmapQueueView({ profile, profileId, roadmap, setRoadmap }) {
       </div>
 
       <StudyTrackerChip active={studyTracker.active} pendingConfirm={studyTracker.pendingConfirm} onMarkDone={studyTracker.markDoneNow} onDismiss={studyTracker.dismiss} onConfirmYes={studyTracker.confirmYes} onConfirmNo={studyTracker.confirmNo} />
+
+      <InAppResourceViewer
+        key={activeResource?.resource?.url ?? "no-resource"}
+        resource={activeResource?.resource}
+        onClose={() => setActiveResource(null)}
+        onComplete={handleResourceStudied}
+        completing={completingResource}
+      />
     </>
   );
 }

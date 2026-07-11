@@ -89,19 +89,19 @@ def _llm() -> ChatMistralAI:
     )
 
 
-def _attach_resources(modules: list[dict], *, budget: str | None) -> None:
+async def _attach_resources(modules: list[dict], *, budget: str | None) -> None:
     """Call the learning-resources tool once per module skill (deterministic)."""
     for module in modules:
         skill = module.get("skill") or ""
         if not skill:
             module["resources"] = []
             continue
-        module["resources"] = get_learning_resources_tool.invoke(
+        module["resources"] = await get_learning_resources_tool.ainvoke(
             {"skill": skill, "budget": budget or "free", "limit": 3}
         )
 
 
-def _fallback_module(skill: str, seen_ids: set[str], *, budget: str | None = "free") -> dict:
+async def _fallback_module(skill: str, seen_ids: set[str], *, budget: str | None = "free") -> dict:
     module = {
         "id": _slugify(skill, seen_ids),
         "title": skill,
@@ -124,18 +124,18 @@ def _fallback_module(skill: str, seen_ids: set[str], *, budget: str | None = "fr
             }
         ],
     }
-    _attach_resources([module], budget=budget)
+    await _attach_resources([module], budget=budget)
     return module
 
 
-def _fallback_curriculum(
+async def _fallback_curriculum(
     priority_skills: list[dict], role_skills: list[str], *, budget: str | None = "free"
 ) -> dict:
     """Deterministic curriculum: one placeholder module per priority skill."""
     names = [p["skill"] for p in priority_skills[:8]] or role_skills[:6]
     seen_ids: set[str] = set()
     modules = [
-        _fallback_module(normalize_skill(skill) or skill, seen_ids, budget=budget)
+        await _fallback_module(normalize_skill(skill) or skill, seen_ids, budget=budget)
         for skill in names
     ]
     return {
@@ -175,7 +175,7 @@ async def generate_curriculum(
     budget = profile.budget or "free"
 
     if not priority_skills and not role_skills:
-        return _fallback_curriculum([], [], budget=budget)
+        return await _fallback_curriculum([], [], budget=budget)
 
     role_skill_names = ", ".join(role_skills[:20])
     roadmap_summary = ""
@@ -223,7 +223,7 @@ async def generate_curriculum(
 
     result = await call_structured(_llm(), LearningCurriculumDraft, prompt)
     if result is None:
-        return _fallback_curriculum(priority_skills, role_skills, budget=budget)
+        return await _fallback_curriculum(priority_skills, role_skills, budget=budget)
 
     seen_ids: set[str] = set()
     sections = []
@@ -248,12 +248,12 @@ async def generate_curriculum(
                 }
             )
         if modules:
-            _attach_resources(modules, budget=budget)
+            await _attach_resources(modules, budget=budget)
             sections.append(
                 {"id": _slugify(section.title, seen_ids), "title": section.title, "modules": modules}
             )
 
     if not sections:
-        return _fallback_curriculum(priority_skills, role_skills, budget=budget)
+        return await _fallback_curriculum(priority_skills, role_skills, budget=budget)
 
     return {"summary": result.summary, "sections": sections}

@@ -181,28 +181,58 @@ curl -X POST http://127.0.0.1:8000/api/admin/scrape \
 `MISTRAL_API_KEY2`'s quota if unset) generates a sectioned, module-based curriculum from the
 student's skill gap — separate from the week-by-week roadmap. Every module IS a self-contained
 lesson: the LLM writes the explanation (2-4 paragraphs teaching the concept directly), 3-5
-steps, 1-2 worked examples, and 1-2 mini self-check questions with answers — there is no
-external resource link anywhere in a module; the student reads and works through the lesson
-entirely inside DISHA. Every module's skill is passed through `skills_catalog.normalize_skill()`
-— a skill the catalog doesn't recognize is dropped rather than kept as free text. Context
-(priority skills, the role's catalog skills, the existing roadmap skeleton) is gathered via
-`app/orchestrator/tools/learning.py`'s `@tool`-decorated functions before the single
-structured-output LLM call — the same "tools gather grounded context, then one reliable
-structured call" shape as interview/practice/roadmap/gap narrative, rather than a multi-turn
-tool-calling agent loop. The Mistral client sets an explicit generous `max_tokens` (16000) —
-without it, the default silently truncated a full 2-3-section curriculum mid-module, which
-surfaced as a swallowed pydantic validation error rather than a visible failure. Falls back to
-a deterministic one-module-per-priority-skill curriculum (no LLM) if the call still fails.
+steps, 1-2 worked examples, and 1-2 mini self-check questions with answers — the LLM never
+invents or lists a URL itself. Every module's skill is passed through
+`skills_catalog.normalize_skill()` — a skill the catalog doesn't recognize is dropped rather
+than kept as free text. Context (priority skills, the role's catalog skills, the existing
+roadmap skeleton) is gathered via `app/orchestrator/tools/learning.py`'s `@tool`-decorated
+functions before the single structured-output LLM call — the same "tools gather grounded
+context, then one reliable structured call" shape as interview/practice/roadmap/gap narrative,
+rather than a multi-turn tool-calling agent loop. The Mistral client sets an explicit generous
+`max_tokens` (16000) — without it, the default silently truncated a full 2-3-section curriculum
+mid-module, which surfaced as a swallowed pydantic validation error rather than a visible
+failure. Falls back to a deterministic one-module-per-priority-skill curriculum (no LLM) if the
+call still fails.
 
-In the UI, a module is marked complete either by the manual checkbox at any time, or by
-scrolling to the end of its lesson content, which triggers a one-time confirm prompt (never a
-silent auto-tick) — see `frontend/components/learning/LessonModule.jsx`.
+**Real study media, consumed in-app.** Each module's `resources` are attached separately and
+deterministically by `app/services/learning_resources.py` — never LLM-invented. For the
+Learning panel specifically (`async_build_resources_for_skill`), only resources the student can
+open **inside DISHA** are attached, in priority order:
+
+1. Curated catalog YouTube videos → `embed_url` (`consume: "embed"`)
+2. If `MCP_ENABLED=true`: Context7 docs for the skill → `content_md` (`consume: "markdown"`)
+3. If `MCP_ENABLED=true` and no video yet: DuckDuckGo-searched `"{skill} tutorial
+   site:youtube.com"` → embeddable YouTube results only
+
+MCP (`app/services/mcp_client.py`, via `langchain-mcp-adapters`) is **off by default** and
+never required — the curated catalog alone already gives every module a real embeddable video.
+When enabled, every MCP call is wrapped in `asyncio.wait_for(..., mcp_timeout_seconds)`
+(default 8s) and any failure (timeout, unreachable server, unexpected tool schema) is caught and
+resolves to an empty result, never an exception — a flaky third-party MCP server can't break
+`POST /api/learning/generate`. Search-page deep-links (e.g. a YouTube *results* page) are never
+attached to the Learning panel, since those would redirect the student out of the app; the
+roadmap's resource layer (`build_resources_for_skill`, unchanged) still uses them as a
+last-resort fallback there, opened in a new tab as before.
+
+**Defense line:** MCP discovers real videos and docs; students consume them inside DISHA with
+dwell tracking — never LLM-invented URLs, never sent away to learn.
+
+In the UI (`frontend/components/learning/InAppResourceViewer.jsx`), a resource opens in an
+in-app panel — a YouTube iframe or rendered Context7 markdown, never a new tab. A module is
+marked complete by the manual checkbox at any time, by scrolling to the end of its lesson
+content (one-time confirm prompt), or by studying an opened resource for ~45s in-viewer (dwell
+time while the panel is open, not tab visibility) followed by the same confirm prompt.
 
 | Endpoint | What it does |
 |---|---|
 | `POST /api/learning/generate` | `{profile_id, force?}` → generates (or returns the existing active one, unless `force`) |
 | `GET /api/learning/{profile_id}` | latest active curriculum |
-| `PATCH /api/learning/{profile_id}/progress` | `{section_id, module_id, completed, source: manual\|scroll_complete}` — also best-effort marks a matching roadmap node/task complete if the skill matches, so finishing a module advances both views |
+| `PATCH /api/learning/{profile_id}/progress` | `{section_id, module_id, completed, source: manual\|scroll_complete\|resource_dwell}` — also best-effort marks a matching roadmap node/task complete if the skill matches, so finishing a module advances both views |
+
+Config (`app/config.py`): `mcp_enabled` (false), `mcp_timeout_seconds` (8.0),
+`mcp_duckduckgo_url`/`mcp_duckduckgo_command`+`mcp_duckduckgo_args`,
+`mcp_context7_url`/`mcp_context7_command`+`mcp_context7_args` — set a `*_url` for a remote
+HTTP/SSE server, or a `*_command`/`*_args` to spawn one locally over stdio (e.g. `npx`/`uvx`).
 
 ## Profile / CV endpoints
 
@@ -427,9 +457,12 @@ uv run pytest tests/ -v
 ```
 
 Covers job matching (role-conflict penalties, seniority/experience fit, generic-keyword
-suppression), the skills catalog (normalize/filter/role lookup), and the synthetic
-recommender (Jaccard ordering, cold start). `pyproject.toml`'s `[tool.pytest.ini_options]`
-sets `pythonpath = ["."]` so `app.*` imports resolve when running from `backend/`.
+suppression), the skills catalog (normalize/filter/role lookup), the synthetic
+recommender (Jaccard ordering, cold start), and the Learning-panel resource layer — YouTube
+embed-URL parsing, the MCP on/off/failure priority chain (`test_learning_resources.py`), and
+MCP tool discovery/parsing with fake servers so no network call ever runs
+(`test_mcp_client.py`). `pyproject.toml`'s `[tool.pytest.ini_options]` sets
+`pythonpath = ["."]` so `app.*` imports resolve when running from `backend/`.
 
 ## Architecture notes
 

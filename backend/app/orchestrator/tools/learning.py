@@ -19,7 +19,7 @@ from sqlalchemy import select
 
 from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
 from app.db.session import async_session_factory
-from app.services.learning_resources import build_resources_for_skill
+from app.services.learning_resources import async_build_resources_for_skill
 from app.services.skills_catalog import normalize_skill, skills_for_role
 
 
@@ -100,13 +100,15 @@ def normalize_skill_tool(skill: str) -> str | None:
 
 
 @tool
-def get_learning_resources_tool(skill: str, budget: str = "free", limit: int = 3) -> list[dict]:
-    """Fetch real learning resources (docs/video/course) for a skill, filtered by budget.
+async def get_learning_resources_tool(skill: str, budget: str = "free", limit: int = 3) -> list[dict]:
+    """Fetch real, in-app-consumable learning resources (YouTube embeds,
+    Context7 docs) for a skill, filtered by budget.
 
-    Returns curated catalog links first, then YouTube/freeCodeCamp search deep-links.
-    Never invents URLs — same ground truth as the roadmap resource layer.
+    Curated catalog videos come first, then (if MCP is enabled) Context7
+    docs and web-searched YouTube videos. Never invents URLs, and never
+    returns a resource the Learning panel can't open in-app.
     """
-    return build_resources_for_skill(skill, budget=budget, limit=limit)
+    return await async_build_resources_for_skill(skill, budget=budget, limit=limit)
 
 
 LEARNING_TOOLS = [

@@ -86,6 +86,20 @@ class Settings(BaseSettings):
     # Nepal job postings. See app/services/synthetic_recommender.py.
     synthetic_dataset_file: Path = BACKEND_DIR / "datasets" / "Job Datsset.csv"
 
+    # MCP-discovered learning media (app/services/mcp_client.py). Off by
+    # default: the Learning panel works fine on the curated catalog alone —
+    # MCP only adds Context7 docs + web-searched YouTube on top of it.
+    mcp_enabled: bool = False
+    mcp_timeout_seconds: float = 8.0
+    # Prefer remote HTTP/SSE servers when a URL is set; otherwise fall back to
+    # spawning the server locally via stdio (command + args, e.g. npx/uvx).
+    mcp_duckduckgo_url: str | None = None
+    mcp_duckduckgo_command: str | None = None
+    mcp_duckduckgo_args: list[str] = []
+    mcp_context7_url: str | None = None
+    mcp_context7_command: str | None = None
+    mcp_context7_args: list[str] = []
+
 
 @lru_cache
 def get_settings() -> Settings:

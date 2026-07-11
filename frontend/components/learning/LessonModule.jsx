@@ -2,6 +2,8 @@
 
 import { useRef, useState } from "react";
 import Icon from "@/components/ui/Icon";
+import InAppResourceViewer from "@/components/learning/InAppResourceViewer";
+import { resolveResourceConsume } from "@/lib/resourceConsume";
 
 const SCROLL_COMPLETE_THRESHOLD_PX = 24;
 
@@ -22,7 +24,19 @@ export default function LessonModule({ module, done, isToggling, onToggle }) {
   const [open, setOpen] = useState(false);
   const [revealedChecks, setRevealedChecks] = useState({});
   const [scrollPrompt, setScrollPrompt] = useState(false);
+  const [activeResource, setActiveResource] = useState(null);
+  const [completingResource, setCompletingResource] = useState(false);
   const promptedRef = useRef(false);
+
+  const handleResourceStudied = async () => {
+    setCompletingResource(true);
+    try {
+      await onToggle(true, "resource_dwell");
+      setActiveResource(null);
+    } finally {
+      setCompletingResource(false);
+    }
+  };
 
   const handleScroll = (e) => {
     if (promptedRef.current || done) return;
@@ -150,37 +164,44 @@ export default function LessonModule({ module, done, isToggling, onToggle }) {
                   Study resources
                 </p>
                 <div className="space-y-2">
-                  {resources.map((res) => (
-                    <a
-                      key={res.url}
-                      href={res.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-center gap-3 rounded-lg border border-outline-variant bg-surface-container-lowest p-3 transition-colors hover:bg-surface-container-low"
-                    >
-                      <Icon
-                        name={RESOURCE_ICON[res.type] || "link"}
-                        size={18}
-                        className="shrink-0 text-primary"
-                      />
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold text-on-surface">{res.title}</p>
-                        <p className="truncate text-xs text-secondary">
-                          {res.provider}
-                          {res.duration ? ` • ${res.duration}` : ""}
-                        </p>
-                      </div>
-                      <span
-                        className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-                          res.cost === "paid"
-                            ? "bg-tertiary-fixed text-on-tertiary-fixed"
-                            : "bg-primary/10 text-primary"
+                  {resources.map((res) => {
+                    const resolved = resolveResourceConsume(res);
+                    const openable = resolved.consume === "embed" || resolved.consume === "markdown";
+                    return (
+                      <button
+                        key={res.url}
+                        type="button"
+                        disabled={!openable}
+                        onClick={() => openable && setActiveResource(resolved)}
+                        className={`flex w-full items-center gap-3 rounded-lg border border-outline-variant bg-surface-container-lowest p-3 text-left transition-colors ${
+                          openable ? "hover:bg-surface-container-low" : "cursor-not-allowed opacity-50"
                         }`}
                       >
-                        {res.cost || "free"}
-                      </span>
-                    </a>
-                  ))}
+                        <Icon
+                          name={RESOURCE_ICON[res.type] || "link"}
+                          size={18}
+                          className="shrink-0 text-primary"
+                        />
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-sm font-semibold text-on-surface">{res.title}</p>
+                          <p className="truncate text-xs text-secondary">
+                            {res.provider}
+                            {res.duration ? ` • ${res.duration}` : ""}
+                            {!openable ? " • unavailable in-app" : ""}
+                          </p>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
+                            res.cost === "paid"
+                              ? "bg-tertiary-fixed text-on-tertiary-fixed"
+                              : "bg-primary/10 text-primary"
+                          }`}
+                        >
+                          {res.cost || "free"}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -211,6 +232,14 @@ export default function LessonModule({ module, done, isToggling, onToggle }) {
           )}
         </div>
       )}
+
+      <InAppResourceViewer
+        key={activeResource?.url ?? "no-resource"}
+        resource={activeResource}
+        onClose={() => setActiveResource(null)}
+        onComplete={handleResourceStudied}
+        completing={completingResource}
+      />
     </div>
   );
 }

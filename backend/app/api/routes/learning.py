@@ -48,7 +48,7 @@ class ProgressRequest(BaseModel):
     section_id: str
     module_id: str
     completed: bool = True
-    source: Literal["manual", "scroll_complete"] = "manual"
+    source: Literal["manual", "scroll_complete", "resource_dwell"] = "manual"
 
 
 async def _get_profile_or_404(db: AsyncSession, profile_id: uuid.UUID) -> StudentProfile:
