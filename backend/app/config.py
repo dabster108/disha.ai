@@ -113,6 +113,10 @@ class Settings(BaseSettings):
     # account quota instead of the shared anonymous pool.
     mcp_context7_api_key: str | None = None
 
+    # Roadmap generation: master JSON roadmaps by default. Set ROADMAP_USE_LLM=true
+    # to roll back to Groq-authored plans (generate_roadmap / generate_skill_path).
+    roadmap_use_llm: bool = False
+
 
 @lru_cache
 def get_settings() -> Settings:

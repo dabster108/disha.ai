@@ -21,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.config import get_settings
 from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
-from app.services.roadmap import classify_gap_size, generate_roadmap, generate_skill_path, seed_path_progress
+from app.services.roadmap_personalization import build_user_roadmap_dict
 from app.services.skill_gap import compute_combined_skill_gap, compute_market_gap, generate_gap_narrative, load_gap_context
 
 router = APIRouter(prefix="/api", tags=["skill-gap"])
@@ -101,22 +101,18 @@ async def combined_gap(payload: CombinedGapRequest, db: AsyncSession = Depends(g
     if include_narrative is None:
         include_narrative = settings.gap_include_narrative_default
 
-    gap_size = classify_gap_size(gap_data)
     narrative: str | None = None
-    plan = None
-    path_plan = None
+    path_dict = None
+    progress = None
+    summary = None
 
     if payload.run_roadmap and include_narrative:
-        narrative, plan, path_plan = await asyncio.gather(
+        narrative, (path_dict, progress, summary) = await asyncio.gather(
             generate_gap_narrative(gap_data, ctx.profile),
-            generate_roadmap(gap_data, ctx.profile, gap_size),
-            generate_skill_path(gap_data, ctx.profile, gap_size),
+            build_user_roadmap_dict(ctx.profile, gap_data),
         )
     elif payload.run_roadmap:
-        plan, path_plan = await asyncio.gather(
-            generate_roadmap(gap_data, ctx.profile, gap_size),
-            generate_skill_path(gap_data, ctx.profile, gap_size),
-        )
+        path_dict, progress, summary = await build_user_roadmap_dict(ctx.profile, gap_data)
     elif include_narrative:
         narrative = await generate_gap_narrative(gap_data, ctx.profile)
 
@@ -134,16 +130,16 @@ async def combined_gap(payload: CombinedGapRequest, db: AsyncSession = Depends(g
     await db.flush()
 
     roadmap_id: uuid.UUID | None = None
-    if payload.run_roadmap and plan is not None and path_plan is not None:
+    if payload.run_roadmap and path_dict is not None and progress is not None:
         roadmap = Roadmap(
             profile_id=ctx.profile.id,
             snapshot_id=snapshot.id,
             skill_gap=gap_data,
-            weeks=[week.model_dump() for week in plan.weeks],
-            total_weeks=plan.total_weeks,
-            summary=plan.summary,
-            path=path_plan.model_dump(),
-            progress=seed_path_progress(ctx.profile, gap_data, path_plan),
+            weeks=[],
+            total_weeks=0,
+            summary=summary,
+            path=path_dict,
+            progress=progress,
             status="active",
         )
         db.add(roadmap)

@@ -1,11 +1,8 @@
 """Regression tests for app.services.roadmap's generation entry points.
 
-These exist specifically to catch "coroutine was never awaited" bugs: when
-_attach_resources/_attach_path_resources became async (so resource lookup
-could use MCP), one of their two call sites was missed — generate_skill_path
-returned an unawaited coroutine instead of a SkillPathPlan, so every
-POST /api/roadmap 500'd. The LLM call is mocked to return None so these run
-fully offline, forcing both functions down their deterministic fallback path.
+Deterministic master roadmaps are the default (ROADMAP_USE_LLM=false). These
+tests assert resolved plans (not coroutines) and that the default path never
+calls Groq structured output.
 """
 
 import asyncio
@@ -29,7 +26,10 @@ def _gap_data():
 
 
 def _patch_offline(monkeypatch):
+    llm_calls = {"n": 0}
+
     async def fake_call_structured(*args, **kwargs):
+        llm_calls["n"] += 1
         return None
 
     async def fake_resources(skill, *, budget=None, limit=3):
@@ -49,29 +49,43 @@ def _patch_offline(monkeypatch):
 
     monkeypatch.setattr(rm, "call_structured", fake_call_structured)
     monkeypatch.setattr(rm, "async_build_resources_for_skill", fake_resources)
+    monkeypatch.setenv("ROADMAP_USE_LLM", "false")
+    rm.get_settings.cache_clear()
+    return llm_calls
 
 
-def test_generate_roadmap_returns_resolved_plan_not_a_coroutine(monkeypatch):
-    _patch_offline(monkeypatch)
+def test_generate_roadmap_default_is_empty_weeks(monkeypatch):
+    llm_calls = _patch_offline(monkeypatch)
 
     plan = asyncio.run(rm.generate_roadmap(_gap_data(), _profile(), "small"))
 
+    assert llm_calls["n"] == 0
     assert not asyncio.iscoroutine(plan)
-    assert plan.weeks
-    for week in plan.weeks:
-        for task in week.tasks:
-            assert not asyncio.iscoroutine(task.resources)
-            assert isinstance(task.resources, list)
+    assert plan.weeks == []
+    assert plan.total_weeks == 0
+    assert plan.summary
 
 
-def test_generate_skill_path_returns_resolved_plan_not_a_coroutine(monkeypatch):
-    _patch_offline(monkeypatch)
+def test_generate_skill_path_returns_master_path_without_llm(monkeypatch):
+    llm_calls = _patch_offline(monkeypatch)
 
     plan = asyncio.run(rm.generate_skill_path(_gap_data(), _profile(), "small"))
 
+    assert llm_calls["n"] == 0
     assert not asyncio.iscoroutine(plan)
     assert plan.phases
     for phase in plan.phases:
         for node in phase.nodes:
             assert not asyncio.iscoroutine(node.resources)
             assert isinstance(node.resources, list)
+
+
+def test_legacy_llm_path_still_works_when_flag_enabled(monkeypatch):
+    llm_calls = _patch_offline(monkeypatch)
+    monkeypatch.setenv("ROADMAP_USE_LLM", "true")
+    rm.get_settings.cache_clear()
+
+    plan = asyncio.run(rm.generate_roadmap(_gap_data(), _profile(), "small"))
+
+    assert llm_calls["n"] == 1
+    assert plan.weeks

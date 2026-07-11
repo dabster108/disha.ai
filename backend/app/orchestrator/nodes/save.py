@@ -43,6 +43,8 @@ async def save_node(state: CareerState) -> dict:
                 weeks=plan.get("weeks", []),
                 total_weeks=plan.get("total_weeks"),
                 summary=plan.get("summary"),
+                path=plan.get("path"),
+                progress=plan.get("progress") or {},
                 status="active",
             )
             db.add(roadmap_row)

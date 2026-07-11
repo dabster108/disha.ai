@@ -154,6 +154,16 @@ async def _attach_resources(plan: RoadmapPlan, budget: str | None) -> RoadmapPla
 
 
 async def generate_roadmap(gap_data: dict, profile: StudentProfile, gap_size: GapSize) -> RoadmapPlan:
+    """Week-by-week plan. Phase 1 uses empty weeks unless ROADMAP_USE_LLM=true."""
+    if get_settings().roadmap_use_llm:
+        return await _legacy_generate_roadmap(gap_data, profile, gap_size)
+    from app.services.roadmap_personalization import build_user_roadmap, empty_weeks_plan
+
+    _, _, doc = await build_user_roadmap(profile, gap_data)
+    return empty_weeks_plan(doc.summary)
+
+
+async def _legacy_generate_roadmap(gap_data: dict, profile: StudentProfile, gap_size: GapSize) -> RoadmapPlan:
     time_per_week = profile.time_per_week or 10
     budget = profile.budget or "free"
     depth_hint = (
@@ -451,6 +461,16 @@ async def _attach_path_resources(plan: SkillPathPlan, budget: str | None) -> Ski
 
 
 async def generate_skill_path(gap_data: dict, profile: StudentProfile, gap_size: GapSize) -> SkillPathPlan:
+    """Full skill path. Master JSON by default unless ROADMAP_USE_LLM=true."""
+    if get_settings().roadmap_use_llm:
+        return await _legacy_generate_skill_path(gap_data, profile, gap_size)
+    from app.services.roadmap_personalization import build_user_roadmap
+
+    path_plan, _, _ = await build_user_roadmap(profile, gap_data)
+    return path_plan
+
+
+async def _legacy_generate_skill_path(gap_data: dict, profile: StudentProfile, gap_size: GapSize) -> SkillPathPlan:
     """The roadmap.sh-style full curriculum: every fundamental skill for the
     role, from zero, plus gap-driven specialization nodes. Auto-completion of
     already-known nodes happens separately in seed_path_progress()."""

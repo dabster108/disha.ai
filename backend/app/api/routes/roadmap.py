@@ -9,7 +9,6 @@ wants a plan from data that's already been assessed.
 
 from __future__ import annotations
 
-import asyncio
 import copy
 import uuid
 from datetime import datetime
@@ -22,7 +21,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.deps import get_db
 from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
 from app.services.learning_resources import attach_resources_to_path, attach_resources_to_weeks
-from app.services.roadmap import classify_gap_size, generate_roadmap, generate_skill_path, seed_path_progress
+from app.services.roadmap_personalization import annotate_node_statuses, build_user_roadmap_dict
 from app.services.skill_gap import get_or_create_current_snapshot
 
 router = APIRouter(prefix="/api", tags=["roadmap"])
@@ -69,33 +68,15 @@ def _task_resource_count(weeks: list, week: int, task_index: int) -> int:
     return 0
 
 
-def _annotate_node_status(path: dict | None, progress: dict) -> dict | None:
-    """Soft-progression view: first incomplete node is 'active' (the
-    recommended next step), everything after is 'upcoming', still clickable."""
-    if not path:
-        return path
-    completed_nodes = set((progress or {}).get("completed_nodes") or [])
-    next_is_active = True
-    phases = []
-    for phase in path.get("phases") or []:
-        nodes = []
-        for node in phase.get("nodes") or []:
-            node = dict(node)
-            if node.get("id") in completed_nodes:
-                node["status"] = "completed"
-            elif next_is_active:
-                node["status"] = "active"
-                next_is_active = False
-            else:
-                node["status"] = "upcoming"
-            nodes.append(node)
-        phases.append({**phase, "nodes": nodes})
-    return {**path, "phases": phases}
+def _annotate_node_status(path: dict | None, progress: dict, gap_data: dict | None = None) -> dict | None:
+    return annotate_node_statuses(path, progress, gap_data)
 
 
 def _roadmap_out(roadmap: Roadmap) -> RoadmapOut:
     out = RoadmapOut.model_validate(roadmap)
-    return out.model_copy(update={"path": _annotate_node_status(roadmap.path, roadmap.progress)})
+    return out.model_copy(
+        update={"path": _annotate_node_status(roadmap.path, roadmap.progress, roadmap.skill_gap)}
+    )
 
 
 @router.post("/roadmap", response_model=RoadmapOut, status_code=201)
@@ -112,13 +93,9 @@ async def create_roadmap(payload: RoadmapRequest, db: AsyncSession = Depends(get
         snapshot = await get_or_create_current_snapshot(db, profile)
 
     gap_data = snapshot.gap_data
-    gap_size = classify_gap_size(gap_data)
-    plan, path_plan = await asyncio.gather(
-        generate_roadmap(gap_data, profile, gap_size),
-        generate_skill_path(gap_data, profile, gap_size),
-    )
-    path_dict = path_plan.model_dump()
-    progress = seed_path_progress(profile, gap_data, path_plan)
+    path_dict, progress, summary = await build_user_roadmap_dict(profile, gap_data)
+    plan_weeks: list = []
+    total_weeks = 0
 
     existing = await db.execute(
         select(Roadmap)
@@ -142,9 +119,9 @@ async def create_roadmap(payload: RoadmapRequest, db: AsyncSession = Depends(get
         profile_id=profile.id,
         snapshot_id=snapshot.id,
         skill_gap=gap_data,
-        weeks=[week.model_dump() for week in plan.weeks],
-        total_weeks=plan.total_weeks,
-        summary=plan.summary,
+        weeks=plan_weeks,
+        total_weeks=total_weeks,
+        summary=summary,
         path=path_dict,
         progress=progress,
         status="active",

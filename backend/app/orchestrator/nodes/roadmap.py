@@ -5,7 +5,7 @@ import uuid
 from app.db.models import StudentProfile
 from app.db.session import async_session_factory
 from app.orchestrator.state import CareerState
-from app.services.roadmap import generate_roadmap
+from app.services.roadmap_personalization import build_user_roadmap_dict
 
 
 async def roadmap_node(state: CareerState) -> dict:
@@ -14,7 +14,6 @@ async def roadmap_node(state: CareerState) -> dict:
 
     profile_id = state.get("profile_id")
     if not profile_id:
-        # Legacy market-only path has no profile to plan against.
         return {"roadmap": None}
 
     async with async_session_factory() as db:
@@ -23,6 +22,13 @@ async def roadmap_node(state: CareerState) -> dict:
         return {"error": f"Profile {profile_id} not found"}
 
     gap_data = state.get("skill_gap") or {}
-    gap_size = state.get("gap_size", "small")
-    plan = await generate_roadmap(gap_data, profile, gap_size)
-    return {"roadmap": plan.model_dump()}
+    path_dict, progress, summary = await build_user_roadmap_dict(profile, gap_data)
+    return {
+        "roadmap": {
+            "weeks": [],
+            "total_weeks": 0,
+            "summary": summary,
+            "path": path_dict,
+            "progress": progress,
+        }
+    }
