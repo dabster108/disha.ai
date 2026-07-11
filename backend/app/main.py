@@ -61,10 +61,22 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Allow localhost, loopback, and private LAN IPs so Next.js "Network" URLs
+# (e.g. http://192.168.x.x:3000) can reach the API during local dev.
+_DEV_ORIGIN_REGEX = (
+    r"https?://("
+    r"localhost"
+    r"|127\.0\.0\.1"
+    r"|192\.168\.\d{1,3}\.\d{1,3}"
+    r"|10\.\d{1,3}\.\d{1,3}\.\d{1,3}"
+    r"|172\.(?:1[6-9]|2\d|3[01])\.\d{1,3}\.\d{1,3}"
+    r")(:\d+)?"
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[],
-    allow_origin_regex=r"https?://(localhost|127\.0\.0\.1)(:\d+)?",
+    allow_origin_regex=_DEV_ORIGIN_REGEX,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
