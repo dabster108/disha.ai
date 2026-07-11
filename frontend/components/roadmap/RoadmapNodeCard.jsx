@@ -57,7 +57,7 @@ export default function RoadmapNodeCard({
       aria-label={`${node.title}, ${STATUS_LABEL[node.status] || node.status}`}
       aria-current={isActive ? "step" : undefined}
       className={[
-        "roadmap-node-card group relative flex w-[min(100%,280px)] flex-col rounded-2xl border p-4 text-left shadow-sm transition-all duration-300",
+        "roadmap-node-card group relative flex h-full w-full flex-col overflow-hidden rounded-2xl border p-4 text-left shadow-sm transition-all duration-300",
         "hover:-translate-y-0.5 hover:shadow-md focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-primary",
         styles.card,
         styles.ring,
@@ -73,9 +73,16 @@ export default function RoadmapNodeCard({
         >
           <Icon name={isCompleted ? "check_circle" : node.icon || "school"} size={22} filled={isCompleted} />
         </div>
-        <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${styles.badge}`}>
-          {STATUS_LABEL[node.status] || node.status}
-        </span>
+        <div className="flex max-w-[60%] flex-col items-end gap-1">
+          <span className={`rounded-full px-2.5 py-1 text-[10px] font-bold uppercase tracking-wide ${styles.badge}`}>
+            {STATUS_LABEL[node.status] || node.status}
+          </span>
+          {node.autoCompleted && (
+            <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase text-primary">
+              From profile
+            </span>
+          )}
+        </div>
       </div>
 
       <h3
@@ -86,8 +93,12 @@ export default function RoadmapNodeCard({
         {node.title}
       </h3>
 
-      {node.description && (
+      {node.description ? (
         <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-secondary">{node.description}</p>
+      ) : (
+        <p className="mt-1.5 line-clamp-2 text-sm leading-relaxed text-transparent select-none" aria-hidden>
+          &nbsp;
+        </p>
       )}
 
       <div className="mt-auto flex flex-wrap items-center gap-2 pt-4 text-xs text-secondary">
@@ -101,12 +112,6 @@ export default function RoadmapNodeCard({
           <span className="font-semibold text-primary">+{node.xp} XP</span>
         )}
       </div>
-
-      {node.autoCompleted && (
-        <span className="mt-2 inline-flex w-fit rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold uppercase text-primary">
-          From profile
-        </span>
-      )}
 
       {isActive && !reducedMotion && <span className="roadmap-node-pulse pointer-events-none absolute inset-0 rounded-2xl" aria-hidden />}
     </button>

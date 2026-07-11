@@ -36,6 +36,13 @@ from scraper.normalize import (
     html_to_text,
     merge_skills,
 )
+from scraper.tech_focus import (
+    KAMKHOJ_TECH_PATHS,
+    KUMARIJOB_TECH_PAGES,
+    MEROJOB_TECH_QUERIES,
+    filter_it_jobs,
+    tech_oversample_limit,
+)
 
 API_UA = "DishaAI-Scraper/0.1"
 BROWSER_UA = (
@@ -102,81 +109,116 @@ async def _scrape_merojob(
     *,
     max_jobs: int | None = None,
     page_size: int = 20,
+    tech_focus: bool = False,
 ) -> list[JobPosting]:
-    """Merojob exposes a public JSON API used by its Next.js frontend."""
-    jobs: list[JobPosting] = []
-    page = 1
+    """Merojob exposes a public JSON API used by its Next.js frontend.
+
+    With ``tech_focus=True``, rotate ``q=`` tech queries (the API's working
+    search param) so the corpus fills with IT roles instead of the general feed.
+    """
     headers = {"Accept": "application/json", "User-Agent": API_UA}
+    queries: list[str | None] = list(MEROJOB_TECH_QUERIES) if tech_focus else [None]
+    seen_ids: set[str] = set()
+    jobs: list[JobPosting] = []
 
     async with httpx.AsyncClient(timeout=30.0, headers=headers) as client:
-        while True:
-            response = await client.get(
-                MEROJOB_API,
-                params={"page": page, "page_size": page_size},
-            )
-            response.raise_for_status()
-            payload = response.json()
-            results = payload.get("results") or []
-            if not results:
-                break
-
-            detail_targets: list[tuple[dict, JobPosting]] = []
-            for item in results:
-                if max_jobs is not None and len(jobs) + len(detail_targets) >= max_jobs:
+        for query in queries:
+            page = 1
+            while True:
+                params: dict = {"page": page, "page_size": page_size}
+                if query:
+                    params["q"] = query
+                response = await client.get(MEROJOB_API, params=params)
+                response.raise_for_status()
+                payload = response.json()
+                results = payload.get("results") or []
+                if not results:
                     break
 
-                client_info = item.get("client") or {}
-                locations = item.get("job_locations") or []
-                location = ", ".join(
-                    clean_text(loc.get("address") or loc.get("name"))
-                    for loc in locations
-                    if clean_text(loc.get("address") or loc.get("name"))
-                )
-                absolute_url = item.get("absolute_url") or f"/{item.get('slug')}/"
-                if absolute_url.startswith("/"):
-                    source_url = f"{MEROJOB_SITE}{absolute_url}"
-                else:
-                    source_url = absolute_url
+                detail_targets: list[tuple[dict, JobPosting]] = []
+                for item in results:
+                    job_key = str(item.get("id"))
+                    if job_key in seen_ids:
+                        continue
+                    # Soft cap on raw buffer while tech-filtering; don't stop
+                    # at max_jobs until IT count is checked below.
+                    raw_cap = (max_jobs * 8) if (tech_focus and max_jobs) else max_jobs
+                    if raw_cap is not None and len(jobs) + len(detail_targets) >= raw_cap:
+                        break
 
-                posting = JobPosting(
-                    id=f"merojob-{item['id']}",
-                    source="merojob",
-                    title=clean_text(item.get("title")),
-                    company=clean_text(client_info.get("client_name") or client_info.get("org_name")),
-                    location=location or "Nepal",
-                    required_skills=[clean_text(skill) for skill in item.get("skills") or [] if clean_text(skill)],
-                    salary_range=format_merojob_salary(
-                        item.get("offered_salary"),
-                        hidden=bool(item.get("hide_salary")),
-                    ),
-                    source_url=source_url,
-                )
-                if posting.required_skills:
-                    description = html_to_text(item.get("specification") or item.get("description"))
-                    posting.required_skills = merge_skills(
-                        posting.required_skills,
-                        description=description,
+                    client_info = item.get("client") or {}
+                    locations = item.get("job_locations") or []
+                    location = ", ".join(
+                        clean_text(loc.get("address") or loc.get("name"))
+                        for loc in locations
+                        if clean_text(loc.get("address") or loc.get("name"))
                     )
-                    jobs.append(posting)
-                else:
-                    detail_targets.append((item, posting))
+                    absolute_url = item.get("absolute_url") or f"/{item.get('slug')}/"
+                    if absolute_url.startswith("/"):
+                        source_url = f"{MEROJOB_SITE}{absolute_url}"
+                    else:
+                        source_url = absolute_url
 
-            if detail_targets:
-                detail_jobs = await asyncio.gather(
-                    *[
-                        _enrich_merojob_detail(client, item, posting)
-                        for item, posting in detail_targets
-                    ]
-                )
-                jobs.extend(detail_jobs)
+                    posting = JobPosting(
+                        id=f"merojob-{item['id']}",
+                        source="merojob",
+                        title=clean_text(item.get("title")),
+                        company=clean_text(client_info.get("client_name") or client_info.get("org_name")),
+                        location=location or "Nepal",
+                        required_skills=[
+                            clean_text(skill) for skill in item.get("skills") or [] if clean_text(skill)
+                        ],
+                        salary_range=format_merojob_salary(
+                            item.get("offered_salary"),
+                            hidden=bool(item.get("hide_salary")),
+                        ),
+                        source_url=source_url,
+                    )
+                    seen_ids.add(job_key)
+                    if posting.required_skills:
+                        description = html_to_text(item.get("specification") or item.get("description"))
+                        posting.required_skills = merge_skills(
+                            posting.required_skills,
+                            description=description,
+                        )
+                        jobs.append(posting)
+                    else:
+                        detail_targets.append((item, posting))
 
-            if max_jobs is not None and len(jobs) >= max_jobs:
-                return jobs[:max_jobs]
+                if detail_targets:
+                    detail_jobs = await asyncio.gather(
+                        *[
+                            _enrich_merojob_detail(client, item, posting)
+                            for item, posting in detail_targets
+                        ]
+                    )
+                    jobs.extend(detail_jobs)
 
-            if not payload.get("next"):
+                # Tech focus: only IT postings count toward max_jobs — otherwise
+                # a weak ``q=`` that returns the general feed fills the quota
+                # with sales/admin roles before we ever filter.
+                if tech_focus:
+                    it_count = len(filter_it_jobs(jobs))
+                    if max_jobs is not None and it_count >= max_jobs:
+                        break
+                elif max_jobs is not None and len(jobs) >= max_jobs:
+                    jobs = jobs[:max_jobs]
+                    break
+
+                if not payload.get("next"):
+                    break
+                page += 1
+
+            if tech_focus:
+                if max_jobs is not None and len(filter_it_jobs(jobs)) >= max_jobs:
+                    break
+            elif max_jobs is not None and len(jobs) >= max_jobs:
                 break
-            page += 1
 
+    if tech_focus:
+        jobs = filter_it_jobs(jobs)
+    if max_jobs is not None:
+        jobs = jobs[:max_jobs]
     return jobs
 
 
@@ -225,23 +267,33 @@ KUMARIJOB_LISTING_PAGES = [
 ]
 
 
-async def _scrape_kumarijob(*, max_jobs: int | None = None) -> list[JobPosting]:
-    listings = await _kumarijob_collect_listings(max_jobs=max_jobs)
+async def _scrape_kumarijob(*, max_jobs: int | None = None, tech_focus: bool = False) -> list[JobPosting]:
+    collect_limit = tech_oversample_limit(max_jobs, multiplier=3) if tech_focus else max_jobs
+    listings = await _kumarijob_collect_listings(max_jobs=collect_limit, tech_focus=tech_focus)
     semaphore = asyncio.Semaphore(5)
 
     async def scrape_one(listing: dict) -> JobPosting:
         async with semaphore:
             return await _kumarijob_detail(listing)
 
-    return await _gather_postings([scrape_one(listing) for listing in listings], "kumarijob")
+    jobs = await _gather_postings([scrape_one(listing) for listing in listings], "kumarijob")
+    if tech_focus:
+        jobs = filter_it_jobs(jobs)
+    if max_jobs is not None:
+        jobs = jobs[:max_jobs]
+    return jobs
 
 
-async def _kumarijob_collect_listings(*, max_jobs: int | None) -> list[dict]:
+async def _kumarijob_collect_listings(*, max_jobs: int | None, tech_focus: bool = False) -> list[dict]:
     seen_urls: set[str] = set()
     seen_job_ids: set[str] = set()
     listings: list[dict] = []
+    pages = list(KUMARIJOB_TECH_PAGES) if tech_focus else list(KUMARIJOB_LISTING_PAGES)
+    # After tech keyword pages, also skim the homepage for any extra IT cards.
+    if tech_focus:
+        pages.extend(KUMARIJOB_LISTING_PAGES)
 
-    for page_url in KUMARIJOB_LISTING_PAGES:
+    for page_url in pages:
         html = await fetch_html(page_url, wait_seconds=1.5)
         soup = BeautifulSoup(html, "html.parser")
         for card in soup.select("[data-jobid]"):
@@ -684,8 +736,9 @@ KAMKHOJ_CANONICAL_RE = re.compile(
 )
 
 
-async def _scrape_kamkhoj(*, max_jobs: int | None = None) -> list[JobPosting]:
-    listings = await _kamkhoj_collect_listings(max_jobs=max_jobs)
+async def _scrape_kamkhoj(*, max_jobs: int | None = None, tech_focus: bool = False) -> list[JobPosting]:
+    collect_limit = tech_oversample_limit(max_jobs) if tech_focus else max_jobs
+    listings = await _kamkhoj_collect_listings(max_jobs=collect_limit, tech_focus=tech_focus)
 
     headers = {"User-Agent": BROWSER_UA}
     semaphore = asyncio.Semaphore(5)
@@ -695,33 +748,49 @@ async def _scrape_kamkhoj(*, max_jobs: int | None = None) -> list[JobPosting]:
             async with semaphore:
                 return await _kamkhoj_detail(client, listing)
 
-        return await _gather_postings([scrape_one(listing) for listing in listings], "kamkhoj")
+        jobs = await _gather_postings([scrape_one(listing) for listing in listings], "kamkhoj")
+    if tech_focus:
+        jobs = filter_it_jobs(jobs)
+    if max_jobs is not None:
+        jobs = jobs[:max_jobs]
+    return jobs
 
 
-async def _kamkhoj_collect_listings(*, max_jobs: int | None) -> list[dict]:
+async def _kamkhoj_collect_listings(*, max_jobs: int | None, tech_focus: bool = False) -> list[dict]:
     listings: list[dict] = []
     seen: set[str] = set()
-
-    # Page 1 is server-rendered — plain httpx.
     headers = {"User-Agent": BROWSER_UA}
-    async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
-        response = await client.get(KAMKHOJ_JOBS)
-        response.raise_for_status()
-        _kamkhoj_parse_cards(response.text, listings, seen)
 
-    if max_jobs is not None and len(listings) >= max_jobs:
-        return listings[:max_jobs]
+    # Tech focus: start on IT / software-development category pages, then fall
+    # through to the general /jobs feed (oversampled + filtered later).
+    start_paths = list(KAMKHOJ_TECH_PATHS) if tech_focus else ["/jobs"]
+    if tech_focus:
+        start_paths.append("/jobs")
 
-    # Pages 2+ only render with JS.
-    page = 2
-    while max_jobs is None or len(listings) < max_jobs:
-        html = await fetch_html(f"{KAMKHOJ_JOBS}?page={page}", wait_seconds=2.5)
-        before = len(listings)
-        _kamkhoj_parse_cards(html, listings, seen)
-        if len(listings) == before:  # no new cards -> past the last page
-            break
-        page += 1
-        await asyncio.sleep(0.5)
+    for path in start_paths:
+        base_url = f"{KAMKHOJ_BASE}{path}"
+        # Page 1 is server-rendered — plain httpx.
+        async with httpx.AsyncClient(timeout=30.0, headers=headers, follow_redirects=True) as client:
+            response = await client.get(base_url)
+            response.raise_for_status()
+            _kamkhoj_parse_cards(response.text, listings, seen)
+
+        if max_jobs is not None and len(listings) >= max_jobs:
+            return listings[:max_jobs]
+
+        # Pages 2+ only render with JS.
+        page = 2
+        while max_jobs is None or len(listings) < max_jobs:
+            html = await fetch_html(f"{base_url}?page={page}", wait_seconds=2.5)
+            before = len(listings)
+            _kamkhoj_parse_cards(html, listings, seen)
+            if len(listings) == before:  # no new cards -> past the last page
+                break
+            page += 1
+            await asyncio.sleep(0.5)
+
+        if max_jobs is not None and len(listings) >= max_jobs:
+            return listings[:max_jobs]
 
     return listings if max_jobs is None else listings[:max_jobs]
 
@@ -889,23 +958,42 @@ MODES: dict[str, list[str]] = {
 }
 
 
-async def scrape_source(name: str, *, max_jobs: int | None = None) -> list[JobPosting]:
+async def scrape_source(
+    name: str,
+    *,
+    max_jobs: int | None = None,
+    tech_focus: bool = False,
+) -> list[JobPosting]:
     if name not in SOURCES:
         raise ValueError(f"Unknown source '{name}'. Available: {', '.join(SOURCES)}")
-    return await SOURCES[name](max_jobs=max_jobs)
+    adapter = SOURCES[name]
+    # Adapters that understand tech_focus (kamkhoj / merojob / kumarijob) use
+    # IT category/search entry points. Others oversample then filter.
+    if name in {"kamkhoj", "merojob", "kumarijob"}:
+        return await adapter(max_jobs=max_jobs, tech_focus=tech_focus)
+    fetch_limit = tech_oversample_limit(max_jobs) if tech_focus else max_jobs
+    jobs = await adapter(max_jobs=fetch_limit)
+    if tech_focus:
+        jobs = filter_it_jobs(jobs)
+        if max_jobs is not None:
+            jobs = jobs[:max_jobs]
+    return jobs
 
 
 async def scrape_all(
     *,
     max_per_source: int | None = None,
     sources: list[str] | None = None,
+    tech_focus: bool = False,
 ) -> list[JobPosting]:
     names = sources or list(SOURCES)
     jobs: list[JobPosting] = []
     for name in names:
-        print(f"Scraping {name} (max={max_per_source or 'all'})...")
+        print(f"Scraping {name} (max={max_per_source or 'all'}, tech_focus={tech_focus})...")
         try:
-            jobs.extend(await scrape_source(name, max_jobs=max_per_source))
+            jobs.extend(
+                await scrape_source(name, max_jobs=max_per_source, tech_focus=tech_focus)
+            )
         except Exception as exc:
             # One broken portal must not kill the whole run.
             print(f"  ! {name} failed: {type(exc).__name__}: {exc}")

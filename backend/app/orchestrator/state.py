@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from typing import Literal, TypedDict
 
+from app.db.models import StudentProfile
+
 
 class CareerState(TypedDict, total=False):
     """State flowing through the intake -> gap -> roadmap -> save graph."""
@@ -22,6 +24,12 @@ class CareerState(TypedDict, total=False):
     budget: str | None
 
     # Derived / outputs
+    # Loaded once in intake, reused by gap/roadmap instead of each re-fetching
+    # the same row (expire_on_commit=False on async_session_factory makes the
+    # detached ORM object safe to read across node/session boundaries as long
+    # as only already-loaded plain columns are touched, which is all gap/
+    # roadmap need — see app/db/session.py).
+    profile: StudentProfile | None
     gap_size: Literal["large", "small"]
     skill_gap: dict
     narrative_summary: str | None

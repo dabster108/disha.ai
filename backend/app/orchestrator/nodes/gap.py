@@ -30,16 +30,25 @@ async def gap_node(state: CareerState) -> dict:
             interview_session_id=uuid.UUID(interview_session_id) if interview_session_id else None,
             practice_session_id=uuid.UUID(practice_session_id) if practice_session_id else None,
             n_jobs=n_jobs,
+            profile=state.get("profile"),
         )
         if ctx is None:
             return {"error": f"Profile {profile_id} not found"}
 
         gap_data = compute_combined_skill_gap(ctx)
+
+        # When roadmap will also run, roadmap_node gathers narrative alongside
+        # the (non-LLM, but I/O-bound) roadmap build instead of it being
+        # awaited here and roadmap only starting afterward — same reasoning as
+        # the asyncio.gather in api/routes/gap.py's combined_gap. Only await it
+        # here when roadmap won't run, since then there's nothing to overlap with.
         narrative = None
-        if state.get("include_narrative", True):
+        defer_narrative = state.get("include_narrative", True) and state.get("run_roadmap", True)
+        if state.get("include_narrative", True) and not defer_narrative:
             narrative = await generate_gap_narrative(gap_data, ctx.profile)
 
     return {
+        "profile": ctx.profile,
         "skill_gap": gap_data,
         "narrative_summary": narrative,
         "gap_size": classify_gap_size(gap_data),

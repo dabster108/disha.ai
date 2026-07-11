@@ -25,7 +25,7 @@ from pypdf import PdfReader
 
 from app.config import get_settings
 from app.services.llm_utils import call_structured
-from app.services.skills_catalog import filter_to_catalog, normalize_skill
+from app.services.skills_catalog import filter_to_catalog
 
 MAX_CV_CHARS = 12000
 MISTRAL_OCR_URL = "https://api.mistral.ai/v1/ocr"
@@ -355,16 +355,9 @@ async def parse_cv(cv_text: str) -> tuple[ParsedCV, list[str]]:
 
     parsed = _merge_hints(llm_result, hints)
     parsed.skills = _dedupe_skills(parsed.skills)
-
-    dropped = [s for s in parsed.skills if normalize_skill(s) is None]
     parsed.skills = filter_to_catalog(parsed.skills)
 
     warnings = build_parse_warnings(parsed, hints)
-    if dropped:
-        warnings.append(
-            f"{len(dropped)} skill(s) from your CV aren't in our catalog and were left out: "
-            f"{', '.join(dropped[:8])}{'…' if len(dropped) > 8 else ''}. Add them manually if relevant."
-        )
     return parsed, warnings
 
 

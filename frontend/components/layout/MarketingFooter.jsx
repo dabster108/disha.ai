@@ -3,10 +3,10 @@ import Icon from "@/components/ui/Icon";
 
 export default function MarketingFooter() {
   return (
-    <footer className="w-full border-t border-outline-variant bg-surface py-section-gap">
+    <footer className="w-full border-t border-outline-variant bg-surface py-20">
       <div className="mx-auto flex max-w-container-max flex-col items-start justify-between gap-gutter px-margin-mobile md:flex-row md:px-margin-desktop">
         <div className="max-w-sm space-y-6">
-          <div className="text-headline-lg-mobile font-bold text-on-surface">
+          <div className="text-headline-lg font-bold text-primary">
             DISHA AI
           </div>
           <p className="text-body-md text-secondary">

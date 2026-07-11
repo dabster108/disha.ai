@@ -432,3 +432,19 @@ body {
     transform: translateY(0);
   }
 }
+
+/* Very slow, low-opacity background wash drift — used behind hero content.
+   Covered by the global prefers-reduced-motion override above. */
+.bg-wash-drift {
+  animation: wash-drift 22s ease-in-out infinite;
+}
+
+@keyframes wash-drift {
+  0%,
+  100% {
+    transform: translate(-3%, -2%) scale(1);
+  }
+  50% {
+    transform: translate(3%, 2%) scale(1.06);
+  }
+}

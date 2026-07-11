@@ -3,10 +3,11 @@
 import { useEffect, useState } from "react";
 
 const CARD_WIDTH = 280;
-const CARD_HEIGHT = 168;
-const SECTION_GAP_X = 96;
-const NODE_GAP_Y = 40;
-const SECTION_HEADER = 48;
+/** Must be >= RoadmapNodeCard content (icon, 2-line title/desc, meta, badges). */
+const CARD_HEIGHT = 236;
+const SECTION_GAP_X = 112;
+const NODE_GAP_Y = 56;
+const SECTION_HEADER = 52;
 const PADDING = 48;
 
 export function layoutRoadmapCanvas(sections, { vertical = false } = {}) {

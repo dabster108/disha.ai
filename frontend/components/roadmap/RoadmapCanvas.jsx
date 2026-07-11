@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import RoadmapNodeCard from "./RoadmapNodeCard";
-import RoadmapConnectors, { layoutRoadmapCanvas } from "./RoadmapConnectors";
+import RoadmapConnectors, { CARD_HEIGHT, CARD_WIDTH, layoutRoadmapCanvas } from "./RoadmapConnectors";
 import RoadmapDetailPanel from "./RoadmapDetailPanel";
 import { RoadmapZoomControls } from "./RoadmapProgressHeader";
 import { useRoadmapCanvasControls } from "./useRoadmapCanvasControls";
@@ -168,7 +168,11 @@ export default function RoadmapCanvas({
             const pos = layout.positions.get(node.id);
             if (!pos) return null;
             return (
-              <div key={node.id} className="absolute" style={{ left: pos.x, top: pos.y }}>
+              <div
+                key={node.id}
+                className="absolute"
+                style={{ left: pos.x, top: pos.y, width: CARD_WIDTH, height: CARD_HEIGHT }}
+              >
                 <RoadmapNodeCard
                   node={node}
                   index={index}

@@ -43,12 +43,48 @@ _QUOTA_EXCEEDED_RE = re.compile(r"quota exceeded", re.IGNORECASE)
 _CONTEXT7_CONCURRENCY = 3
 _context7_semaphore: asyncio.Semaphore | None = None
 
+# A roadmap/curriculum resource pass calls search_learning_web once per
+# skill, all fanned out via asyncio.gather (learning_resources.py). Each
+# call spawns its own duckduckgo-mcp-server subprocess (~2-3s to launch),
+# which is the actual dominant cost — not contention between them. Measured:
+# capping this at Context7's concurrency (3) made a 12-skill roadmap slower
+# (37s -> 42s) by serializing calls that were previously running in parallel.
+# This cap exists only to bound the pathological case (a very large generic
+# ladder), not to bind on a normal-sized roadmap.
+_DUCKDUCKGO_CONCURRENCY = 8
+_duckduckgo_semaphore: asyncio.Semaphore | None = None
+
 
 def _get_context7_semaphore() -> asyncio.Semaphore:
     global _context7_semaphore
     if _context7_semaphore is None:
         _context7_semaphore = asyncio.Semaphore(_CONTEXT7_CONCURRENCY)
     return _context7_semaphore
+
+
+def _get_duckduckgo_semaphore() -> asyncio.Semaphore:
+    global _duckduckgo_semaphore
+    if _duckduckgo_semaphore is None:
+        _duckduckgo_semaphore = asyncio.Semaphore(_DUCKDUCKGO_CONCURRENCY)
+    return _duckduckgo_semaphore
+
+
+# get_tools() opens a fresh MCP session to list a server's tools — per the
+# adapter library's own docstring, "a new session will be created for each
+# tool call". The tool schema is static for the life of this process, so
+# every call beyond the first was paying for a subprocess spawn + handshake
+# to re-learn the same thing. Cache successes only — a transient failure
+# should still be retried on the next call, not remembered forever.
+_tools_cache: dict[str, list] = {}
+_tools_cache_locks: dict[str, asyncio.Lock] = {}
+
+
+def _lock_for(server_name: str) -> asyncio.Lock:
+    lock = _tools_cache_locks.get(server_name)
+    if lock is None:
+        lock = asyncio.Lock()
+        _tools_cache_locks[server_name] = lock
+    return lock
 
 
 def _connection_for(url: str | None, command: str | None, args: list[str] | None) -> dict[str, Any] | None:
@@ -84,17 +120,27 @@ def _client() -> MultiServerMCPClient | None:
 
 
 async def _tools_for(server_name: str) -> list:
+    cached = _tools_cache.get(server_name)
+    if cached is not None:
+        return cached
+
     client = _client()
     if client is None or server_name not in client.connections:
         return []
     settings = get_settings()
-    try:
-        return await asyncio.wait_for(
-            client.get_tools(server_name=server_name), timeout=settings.mcp_timeout_seconds
-        )
-    except Exception:
-        logger.warning("mcp: failed to load tools from %r", server_name, exc_info=True)
-        return []
+    async with _lock_for(server_name):
+        cached = _tools_cache.get(server_name)
+        if cached is not None:
+            return cached
+        try:
+            tools = await asyncio.wait_for(
+                client.get_tools(server_name=server_name), timeout=settings.mcp_timeout_seconds
+            )
+        except Exception:
+            logger.warning("mcp: failed to load tools from %r", server_name, exc_info=True)
+            return []
+        _tools_cache[server_name] = tools
+        return tools
 
 
 def _find_tool(tools: list, *name_fragments: str):
@@ -188,11 +234,12 @@ async def search_learning_web(query: str) -> list[dict]:
         return []
 
     query_arg = _match_arg_name(tool, "query", "q", "search") or "query"
-    try:
-        raw = await _invoke(tool, {query_arg: query})
-    except Exception:
-        logger.warning("mcp: duckduckgo search failed for %r", query, exc_info=True)
-        return []
+    async with _get_duckduckgo_semaphore():
+        try:
+            raw = await _invoke(tool, {query_arg: query})
+        except Exception:
+            logger.warning("mcp: duckduckgo search failed for %r", query, exc_info=True)
+            return []
 
     return _parse_search_results(raw)
 

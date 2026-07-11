@@ -85,6 +85,22 @@ async def create_roadmap(payload: RoadmapRequest, db: AsyncSession = Depends(get
     if profile is None:
         raise HTTPException(status_code=404, detail="Profile not found")
 
+    existing = await db.execute(
+        select(Roadmap)
+        .where(Roadmap.profile_id == profile.id, Roadmap.status == "active")
+        .order_by(Roadmap.created_at.desc())
+        .limit(1)
+    )
+    active = existing.scalar_one_or_none()
+
+    # Generate-once: an active roadmap already covers this profile's current
+    # target_role (goal changes mark the old one "replanned" via profile PATCH,
+    # so it wouldn't show up here). Without force_replan, POST is idempotent —
+    # return what's there instead of spawning a duplicate row, wiping progress,
+    # and paying for a Chroma/Groq snapshot recompute nobody asked for.
+    if active is not None and not payload.force_replan:
+        return _roadmap_out(active)
+
     if payload.snapshot_id is not None:
         snapshot = await db.get(SkillGapSnapshot, payload.snapshot_id)
         if snapshot is None or snapshot.profile_id != profile.id:
@@ -97,22 +113,14 @@ async def create_roadmap(payload: RoadmapRequest, db: AsyncSession = Depends(get
     plan_weeks: list = []
     total_weeks = 0
 
-    existing = await db.execute(
-        select(Roadmap)
-        .where(Roadmap.profile_id == profile.id, Roadmap.status == "active")
-        .order_by(Roadmap.created_at.desc())
-        .limit(1)
-    )
-    active = existing.scalar_one_or_none()
     if active is not None:
-        if payload.force_replan:
-            # Keep manually-completed nodes (not auto-seeded) whose id still
-            # exists in the regenerated path — everything else is re-seeded fresh.
-            old_progress = active.progress or {}
-            auto_ids = {e.get("node_id") for e in old_progress.get("auto_completed") or []}
-            manually_completed = set(old_progress.get("completed_nodes") or []) - auto_ids
-            new_node_ids = {node["id"] for phase in path_dict.get("phases") or [] for node in phase.get("nodes") or []}
-            progress["completed_nodes"] = list(set(progress["completed_nodes"]) | (manually_completed & new_node_ids))
+        # Keep manually-completed nodes (not auto-seeded) whose id still
+        # exists in the regenerated path — everything else is re-seeded fresh.
+        old_progress = active.progress or {}
+        auto_ids = {e.get("node_id") for e in old_progress.get("auto_completed") or []}
+        manually_completed = set(old_progress.get("completed_nodes") or []) - auto_ids
+        new_node_ids = {node["id"] for phase in path_dict.get("phases") or [] for node in phase.get("nodes") or []}
+        progress["completed_nodes"] = list(set(progress["completed_nodes"]) | (manually_completed & new_node_ids))
         active.status = "replanned"
 
     roadmap = Roadmap(

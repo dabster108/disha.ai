@@ -55,6 +55,13 @@ def is_youtube_url(url: str | None) -> bool:
     return youtube_video_id(url) is not None
 
 
+async def _none():
+    """Placeholder coroutine for an asyncio.gather slot that's skipped for
+    this skill (not Context7-eligible, or a catalog video already covers
+    it) — keeps the gather shape uniform without an extra MCP round trip."""
+    return None
+
+
 def normalize_resource(resource: dict) -> dict:
     """Fill in embed_url/consume/content_md for a resource dict that doesn't
     already declare them. Never overwrites an explicit ``consume`` (e.g.
@@ -251,29 +258,37 @@ async def async_build_resources_for_skill(skill: str, *, budget: str | None = "f
 
     settings = get_settings()
     if settings.mcp_enabled:
-        if _context7_eligible(skill):
-            docs = await fetch_library_docs(skill)
-            if docs:
-                resources.append(normalize_resource(docs))
+        # Context7 (docs) and DuckDuckGo (video) are independent MCP round
+        # trips for the same skill — Context7 only ever returns type="docs",
+        # so "skip DuckDuckGo if we already have a video" can only be true
+        # from the catalog step above, never from Context7's own result.
+        # Awaiting them back-to-back was paying for both subprocess round
+        # trips serially; gathering them roughly halves this skill's MCP wall
+        # time instead.
+        need_video_search = not any(r["type"] == "video" for r in resources)
+        docs, found = await asyncio.gather(
+            fetch_library_docs(skill) if _context7_eligible(skill) else _none(),
+            search_learning_web(f"{skill} tutorial site:youtube.com") if need_video_search else _none(),
+        )
 
-        if not any(r["type"] == "video" for r in resources):
-            found = await search_learning_web(f"{skill} tutorial site:youtube.com")
-            for item in found:
-                url = item.get("url") or ""
-                if not is_youtube_url(url):
-                    continue
-                resources.append(
-                    normalize_resource(
-                        {
-                            "title": item.get("title") or f"{skill} tutorial",
-                            "url": url,
-                            "provider": "YouTube",
-                            "type": "video",
-                            "cost": "free",
-                            "duration": None,
-                        }
-                    )
+        if docs:
+            resources.append(normalize_resource(docs))
+        for item in found or []:
+            url = item.get("url") or ""
+            if not is_youtube_url(url):
+                continue
+            resources.append(
+                normalize_resource(
+                    {
+                        "title": item.get("title") or f"{skill} tutorial",
+                        "url": url,
+                        "provider": "YouTube",
+                        "type": "video",
+                        "cost": "free",
+                        "duration": None,
+                    }
                 )
+            )
 
     seen: set[str] = set()
     unique: list[dict] = []

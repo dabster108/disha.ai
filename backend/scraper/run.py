@@ -78,18 +78,26 @@ async def execute_scrape_run(
     log_file: bool = False,
     triggered_by: str = "cli",
     run_id: uuid_mod.UUID | None = None,
+    tech_focus: bool = False,
 ) -> dict:
     """Scrape -> dedup -> write jobs.json -> stats. Returns a run summary dict.
 
     `sources` overrides `mode` when given. With `run_id`, updates that existing
     scrape_runs row (API flow) instead of inserting a new one.
+    ``tech_focus`` pulls IT category/search feeds and drops non-tech postings.
     """
     log_path = setup_logging(to_file=log_file)
     requested = sources or MODES[mode]
     started_at = datetime.now(timezone.utc)
     t0 = time.monotonic()
 
-    log_event("RUN_START", f"RUN_START mode={mode} sources={requested}", mode=mode, sources=requested)
+    log_event(
+        "RUN_START",
+        f"RUN_START mode={mode} sources={requested} tech_focus={tech_focus}",
+        mode=mode,
+        sources=requested,
+        tech_focus=tech_focus,
+    )
 
     jobs: list[JobPosting] = []
     succeeded: list[str] = []
@@ -100,7 +108,9 @@ async def execute_scrape_run(
         log_event("SOURCE_START", f"SOURCE_START source={name}", source=name)
         s0 = time.monotonic()
         try:
-            source_jobs = await scrape_source(name, max_jobs=max_per_source)
+            source_jobs = await scrape_source(
+                name, max_jobs=max_per_source, tech_focus=tech_focus
+            )
         except Exception as exc:
             failed[name] = f"{type(exc).__name__}: {exc}"
             log_event("SOURCE_FAILED", f"SOURCE_FAILED source={name} error={failed[name]}", source=name, error=failed[name])
@@ -119,6 +129,24 @@ async def execute_scrape_run(
         )
 
     kept, removed = dedupe_jobs(jobs)
+    # Final safety net — adapters already filter, but cross-source merge can
+    # still carry a few non-tech cards from homepage fallbacks.
+    if tech_focus:
+        before_tech = len(kept)
+        from scraper.tech_focus import filter_it_jobs
+
+        kept = filter_it_jobs(kept)
+        removed += before_tech - len(kept)
+        jobs_by_source = {}
+        for job in kept:
+            jobs_by_source[job.source] = jobs_by_source.get(job.source, 0) + 1
+        log_event(
+            "TECH_FILTER",
+            f"TECH_FILTER kept={len(kept)} dropped={before_tech - len(kept)}",
+            kept=len(kept),
+            dropped=before_tech - len(kept),
+        )
+
     log_event("DEDUP", f"DEDUP removed={removed} kept={len(kept)}", removed=removed, kept=len(kept))
 
     jobs_file = JobsFile(
@@ -143,7 +171,7 @@ async def execute_scrape_run(
     )
 
     summary = {
-        "scrape_mode": mode if sources is None else "custom",
+        "scrape_mode": mode if sources is None else ("custom-tech" if tech_focus else "custom"),
         "sources_requested": requested,
         "sources_succeeded": succeeded,
         "sources_failed": failed,
@@ -159,6 +187,7 @@ async def execute_scrape_run(
         "log_file": log_path,
         "error_summary": "; ".join(f"{k}: {v}" for k, v in failed.items()) or None,
         "output": str(output),
+        "tech_focus": tech_focus,
     }
 
     if log_db or run_id is not None:
@@ -234,6 +263,11 @@ def parse_args() -> argparse.Namespace:
         help="Scrape only these sources (overrides --mode).",
     )
     parser.add_argument(
+        "--tech-focus",
+        action="store_true",
+        help="Prefer IT/software category+search feeds and keep only tech-sector jobs.",
+    )
+    parser.add_argument(
         "--log-db",
         action="store_true",
         help="Record this run in the Postgres scrape_runs table.",
@@ -259,10 +293,13 @@ def main() -> None:
             log_db=args.log_db,
             log_file=args.log_file,
             triggered_by="cli",
+            tech_focus=args.tech_focus,
         )
     )
 
     print(f"\nWrote {summary['jobs_count']} jobs to {summary['output']} (status: {summary['status']})")
+    if summary.get("tech_focus"):
+        print("Tech-focus: ON (IT / software sector only)")
     print_stats(summary["completeness_by_source"])
 
 

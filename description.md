@@ -6,6 +6,63 @@ real answer, not a guess.
 
 ---
 
+## 0. Concepts explained simply (read this first)
+
+Skip this section if you already know these words. It exists so nothing later in
+this doc assumes knowledge you don't have yet. Every term here is used for real
+somewhere below, this is just the plain-English version before the deep dive.
+
+**LLM (Large Language Model).** A big AI model (we use Groq and Mistral) that
+reads text and predicts the next best words to write. It has no database and no
+real memory of facts. It has only learned patterns from huge amounts of text, so
+it is really good at sounding right, which is not the same as being right.
+
+**Hallucination.** When an LLM confidently makes up something false, a fake
+skill, a fake job, a fake number, because it is only predicting "what sounds
+right" instead of looking anything up. This is the single biggest risk of putting
+an LLM in a real product, and most of the design choices in this doc exist to
+stop it (short version: never let the LLM be the only source of a fact that
+matters). See the dedicated Q&A on this in Section 13.
+
+**Embedding.** A way to turn a piece of text into a list of numbers (called a
+vector) that captures its meaning. Two pieces of text that mean similar things
+end up with number-lists that are close together. This is what lets a computer
+search "by meaning" instead of by exact matching words.
+
+**Vector database.** A database built to store these number-lists and quickly
+find which ones are closest to a given search vector. We use Chroma for this.
+Full detail, and why Chroma specifically, is in Section 2.
+
+**RAG (Retrieval-Augmented Generation).** Instead of asking an LLM to answer
+purely from what it remembers (which risks hallucination), you first fetch real,
+relevant documents from your own data, then hand those documents to the LLM and
+ask it to answer using only that. In this project, RAG means: find real, scraped
+Nepal job postings that match a student, and only ever talk about jobs that are
+actually in that fetched list, never a job the LLM imagined.
+
+**Chunking.** When one document is too long to embed well as a single piece, you
+split it into smaller, sometimes overlapping pieces ("chunks") before embedding
+each one separately. This project does not need it, because a job posting is
+already short. Section 2 explains exactly why, in detail.
+
+**Semantic search.** Searching by meaning (using embeddings plus a vector
+database) instead of by exact keyword match. "Backend Developer" and
+"Server-Side Engineer" can be found as similar even though they share almost no
+exact words.
+
+**Structured output.** Instead of letting an LLM reply with a free-form
+paragraph, you force its reply into a fixed shape (a strict schema with named
+fields, like "title", "skills", "score"). This makes the reply something your
+code can safely read, instead of something your code has to guess-parse.
+
+**MCP (Model Context Protocol).** An open standard that lets an app call outside
+tools (a web search tool, a documentation lookup tool) through one common
+protocol, instead of writing custom one-off integration code for every single
+tool. Think of it like a USB port for AI tools: any MCP-compatible tool can plug
+into any MCP-compatible app the same way. Full detail in Section 9.
+
+---
+
 ## 1. The 30-second version
 
 A student uploads a CV (or fills a form) → the system OCRs/parses it into
@@ -399,7 +456,104 @@ fixed" story if asked.
 
 ---
 
-## 9. Multi-factor job matching (`app/services/job_matching.py`)
+## 9. MCP — real docs and real web search for the Learning panel
+
+`app/services/mcp_client.py` (336 lines), consumed by exactly one place:
+`app/services/learning_resources.py`.
+
+### What MCP actually is, in plain terms
+
+MCP (Model Context Protocol) is an open standard, created by Anthropic, for
+letting an app call outside tools through one common interface, instead of
+writing separate custom integration code for every tool. Picture it like a USB
+port for AI tools: any MCP-compatible tool server can plug into any
+MCP-compatible app the same way, instead of a different one-off wire per
+device. The app doesn't need to know each tool's private API shape in advance,
+it asks the server "what tools do you have?" and gets a schema back.
+
+### The two servers this project actually connects to
+
+Both optional, both off by default (`settings.mcp_enabled = False`):
+
+- **DuckDuckGo MCP server** — runs locally as a subprocess
+  (`MCP_DUCKDUCKGO_COMMAND` + `MCP_DUCKDUCKGO_ARGS` in `.env`, in practice
+  `uvx duckduckgo-mcp-server`). Used for real web search, specifically to find
+  a real YouTube tutorial link for a skill the student needs to learn.
+- **Context7 MCP server** — a hosted server (`MCP_CONTEXT7_URL`, plus an
+  optional `MCP_CONTEXT7_API_KEY` to raise the free quota). Used to fetch real,
+  current documentation for a library or framework, returned as markdown.
+
+### Where this fits: one feature, three layers, in order
+
+The Learning panel's resource list for a skill (`learning_resources.py`) is
+built in this order:
+
+1. **Curated catalog first** — hand-picked resources for that skill, tried
+   always, whether or not MCP is enabled.
+2. **Context7 real docs**, only if MCP is enabled (`fetch_library_docs`).
+3. **DuckDuckGo real video search**, only if MCP is enabled and no video
+   resource exists yet (`search_learning_web`).
+
+If MCP is disabled, unreachable, slow, or a server's reply doesn't parse into
+anything usable, every call in `mcp_client.py` resolves to an empty result
+(`[]` or `None`) instead of raising — the Learning panel still works from the
+curated catalog alone. This is the same "degrade, never break" rule used
+everywhere an external/LLM call happens in this project (see `call_structured()`
+in Section 13).
+
+### How a call actually works (tool discovery, not a hardcoded API shape)
+
+1. `_client()` builds one `MultiServerMCPClient` (from `langchain_mcp_adapters`)
+   with both server connections, and is cached (`@lru_cache`) so it's built
+   once per process.
+2. `_tools_for(server_name)` asks that server "what tools do you have?"
+   (`client.get_tools(...)`) and **caches the answer** — a tool's schema
+   doesn't change mid-process, so only the first call per server pays for the
+   subprocess spawn / handshake.
+3. `_find_tool()` and `_match_arg_name()` then **fuzzy-match** the tool by name
+   (e.g. anything with "search" in it) and its argument names (e.g. anything
+   with "query" or "q" in it) instead of hardcoding "the DuckDuckGo tool is
+   called X and takes a field called Y". Different MCP server implementations
+   name things slightly differently, so this discovers the shape at runtime
+   rather than assuming one fixed API.
+4. `_invoke()` calls the tool with a timeout (`MCP_TIMEOUT_SECONDS`, default
+   8s) so a slow server can never hang a request.
+5. The DuckDuckGo result is parsed with a small cascade of pattern-matchers
+   (`_parse_search_results`) because different servers return either
+   structured JSON, markdown links, or a numbered plain-text list — cheap
+   regexes handle all three rather than assuming one exact format.
+
+### Why MCP instead of hand-writing a DuckDuckGo client and a Context7 client?
+
+Honest answer: for just these two servers, a hand-written HTTP client for each
+would work almost the same technically — this isn't being oversold. What MCP
+actually buys here:
+
+- **One client library talks to both**, over two different transports (a
+  local subprocess for DuckDuckGo, streamable HTTP for Context7), instead of
+  writing and maintaining two separate bespoke API clients.
+- **Tool discovery instead of a hardcoded contract** — if a server changes its
+  exact field names, this code doesn't necessarily need a code change, because
+  it reads the schema at call time (see step 3 above) instead of assuming a
+  fixed shape written once and forgotten.
+- **New tools are a config change, not a rewrite** — swapping in a different
+  MCP-compatible search or docs server later means changing a URL/command in
+  `.env`, not touching `mcp_client.py`, because every MCP server speaks the
+  same protocol.
+
+### Why it's optional and off by default, not a core dependency
+
+Two reasons. First, it depends on either running a local subprocess
+(DuckDuckGo) or reaching an external hosted server with its own quota
+(Context7) — one more moving part in a demo/dev environment that not every
+reviewer's machine needs. Second, the curated resource catalog already gives
+every skill a working set of learning resources on its own, so MCP is a pure
+enhancement (fresher docs, a live video search) layered on top, never a single
+point of failure the rest of the product depends on.
+
+---
+
+## 10. Multi-factor job matching (`app/services/job_matching.py`)
 
 Three stages, not one similarity score:
 
@@ -433,7 +587,7 @@ matches over a padded list of loosely-related ones.**
 
 ---
 
-## 10. Database layer
+## 11. Database layer
 
 - **Neon Postgres** (serverless Postgres) + **async SQLAlchemy 2.0** +
   **Alembic** migrations. Why Neon specifically: serverless/managed, free tier
@@ -456,7 +610,7 @@ matches over a padded list of loosely-related ones.**
 
 ---
 
-## 11. Scraper — where the "live Nepal job market" data actually comes from
+## 12. Scraper — where the "live Nepal job market" data actually comes from
 
 `scraper/scraper.py` — **7 source adapters**: `kamkhoj` (an aggregator that
 already re-publishes postings from many boards), plus 6 direct-portal scrapers
@@ -476,9 +630,65 @@ completeness stats (`source_stats()` — % of postings with skills detected, %
 with real salary, % with a specific location) so source quality is measured,
 not assumed.
 
+### Commercial use and scraping risk, the honest answer
+
+This is the one question that deserves a fully honest answer, not a
+confident-sounding dodge: scraping a website's HTML to build a commercial
+product carries real legal risk, and that risk does not disappear just
+because the data is publicly visible on the page.
+
+What is actually already done to reduce it:
+
+- **robots.txt is checked, not ignored.** Kamkhoj's robots.txt explicitly
+  allows HTML pages and disallows `/api/` and `/_next/` — this scraper only
+  touches the allowed paths (see the comment directly above `_scrape_kamkhoj`
+  in `scraper/scraper.py`).
+- **LinkedIn is deliberately excluded**, specifically because of its Terms of
+  Service (`README.md`: "No LinkedIn scraping (ToS)."). This is a real
+  decision already made, not an oversight, the highest-risk source was cut
+  before it became a problem.
+- **Rate-limited, not aggressive.** Requests are capped
+  (`asyncio.Semaphore(5)` per source), with pacing delays between pages, so
+  this behaves like a slow, polite crawler, not a bot hammering a server.
+- **Only metadata is kept, never the full posting.** A job in this system is
+  a title, company, location, a short skills list, and a salary range, never
+  the full job description text (`data/jobs.json` has no `description` field
+  at all). The actual posting content stays on the source site.
+- **Every job links back to its original posting** (`source_url`), and the
+  frontend's "View" button opens that link in a new tab (`JobMatchCard.jsx`).
+  A student can never apply without visiting the real posting, this system
+  behaves closer to a search/meta-search layer (like Google Jobs, or a flight
+  meta-search site) than a copy of the job board.
+
+What this does **not** resolve, said plainly: robots.txt and a Terms of
+Service are two different things. A site's robots.txt can allow crawling for
+indexing while its ToS still prohibits automated scraping for building a
+separate product, and merojob/kumarijob's ToS likely does exactly that, the
+same as most job boards'. Following robots.txt reduces "we didn't even try to
+be respectful" risk, it does not by itself make scraping these two sites for
+a commercial product contractually safe.
+
+Honest path if this goes from hackathon project to a real commercial
+product:
+
+1. **Ask first.** Reach out to merojob, kumarijob, and kamkhoj for an
+   official data-sharing or API partnership before commercial launch, this is
+   how most job aggregators (Indeed, Google Jobs) eventually operate, even if
+   they started by crawling.
+2. **Lean on employers posting directly.** As real students and companies
+   use DISHA AI, first-party job postings (typed in by employers themselves)
+   can gradually replace scraped ones as the primary source.
+3. **Keep the link-out model permanently.** Never host the full posting or
+   let a student apply without visiting the source, this is both the safer
+   legal posture and good etiquette toward the sites the data comes from.
+4. **Get real legal advice before commercial launch.** This document can
+   explain the engineering decisions honestly, it cannot substitute for a
+   lawyer reviewing Nepal's specific electronic transaction and copyright law
+   against merojob/kumarijob's actual current Terms of Service.
+
 ---
 
-## 12. Anticipated defense questions — quick answers
+## 13. Anticipated defense questions — quick answers
 
 **Q: Why Chroma and not Qdrant/Pinecone/Weaviate/Milvus?**
 Corpus is ~400 documents; those tools are built for a scaled, separately-run
@@ -542,3 +752,30 @@ about real people.
 Serverless/managed Postgres, free tier fits a student project; its
 auto-suspend-when-idle behavior is handled explicitly with a background
 keep-alive ping rather than left as an unaddressed cold-start problem.
+
+**Q: What is MCP and why do you use it?**
+MCP (Model Context Protocol) is an open standard for letting an app call
+outside tools through one common interface instead of a custom integration per
+tool. We use it for two optional, off-by-default tools that enrich the Learning
+panel only: a DuckDuckGo web-search server (real YouTube tutorial links) and a
+Context7 docs server (real, current library documentation).
+
+**Q: What happens if the MCP servers are down or MCP is disabled?**
+Nothing breaks. Every MCP call is wrapped so a disabled setting, an
+unreachable server, a timeout, or an unparsable reply all resolve to an empty
+result, and the Learning panel simply falls back to its curated resource
+catalog, which already works with MCP off.
+
+**Q: Is it legal to scrape merojob/kumarijob/kamkhoj, especially for a
+commercial product?**
+Not fully resolved, said honestly rather than hidden. What's already in
+place: robots.txt is checked and respected (not ignored), LinkedIn was
+deliberately excluded for its ToS, requests are rate-limited, only short
+metadata is stored (never the full posting text), and every job links back
+to the original posting so the source site gets the click, not a copy. That
+said, robots.txt allowing crawling and a site's Terms of Service are two
+different things, and this project's current scraping would need either an
+official partnership with these portals or a lawyer's review of Nepal's
+electronic transaction law before a real commercial launch, this is a
+prototype-stage practice, not a resolved legal position. Full breakdown in
+Section 12.

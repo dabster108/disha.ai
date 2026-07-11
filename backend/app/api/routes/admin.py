@@ -59,10 +59,12 @@ def require_admin(x_admin_key: str | None = Header(default=None)) -> None:
 
 
 class ScrapeRequest(BaseModel):
-    mode: Literal["aggregator", "direct", "hybrid"] = "aggregator"
+    mode: Literal["aggregator", "direct", "hybrid"] = "hybrid"
     sources: list[str] | None = Field(None, description="Override mode with explicit sources")
     max_per_source: int | None = Field(100, ge=1, le=2000)
     reingest_chroma: bool = True
+    # DISHA targets IT careers — prefer tech category/search feeds by default.
+    tech_focus: bool = True
 
 
 class ScrapeTriggerResponse(BaseModel):
@@ -119,6 +121,7 @@ async def _run_scrape_background(run_id: uuid.UUID, request: ScrapeRequest) -> N
                 log_file=True,
                 triggered_by="api",
                 run_id=run_id,
+                tech_focus=request.tech_focus,
             )
         if request.reingest_chroma and summary["status"] != "failed":
             from app.rag.ingest import ingest

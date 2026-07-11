@@ -312,8 +312,12 @@ async def load_gap_context(
     interview_session_id: uuid.UUID | None = None,
     practice_session_id: uuid.UUID | None = None,
     n_jobs: int = 20,
+    profile: StudentProfile | None = None,
 ) -> GapContext | None:
-    profile = await db.get(StudentProfile, profile_id)
+    # Callers that already loaded this profile (the orchestrator's intake
+    # node) can pass it in to skip a redundant round trip for the same row.
+    if profile is None:
+        profile = await db.get(StudentProfile, profile_id)
     if profile is None:
         return None
 

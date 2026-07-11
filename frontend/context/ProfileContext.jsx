@@ -136,14 +136,18 @@ export function ProfileProvider({ children }) {
 
         if (err?.status === 404) {
           // Fallback: profile may exist but Clerk link was missing (same browser session).
+          // Only reuse it when we can prove it's the same person by email — a stale
+          // localStorage id plus a missing email on either side must NOT count as a
+          // match, or a second person signing in on the same browser/device inherits
+          // the first person's profile (and their roadmap progress) by default.
           const storedId =
             typeof window !== "undefined" ? localStorage.getItem(STORAGE_KEY) : null;
           if (storedId) {
             try {
               const byId = await getProfile(storedId);
               const emailMatch =
-                !email ||
-                !byId.email ||
+                Boolean(email) &&
+                Boolean(byId.email) &&
                 byId.email.toLowerCase() === email.toLowerCase();
               if (emailMatch) {
                 applyProfile(byId);

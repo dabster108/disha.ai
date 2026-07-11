@@ -21,6 +21,7 @@ async def intake_node(state: CareerState) -> dict:
         return {"error": f"Profile {profile_id} not found"}
 
     return {
+        "profile": profile,
         "student_skills": profile.skills or [],
         "target_role": profile.target_role,
         "location": profile.location,

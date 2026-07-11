@@ -87,9 +87,56 @@ def seed_jobs_file() -> int:
     return len(SEED_JOBS)
 
 
+def it_seed_jobs() -> list[JobPosting]:
+    """Curated Nepal IT postings only — used to densify a tech-focus scrape."""
+    from scraper.tech_focus import is_it_sector_job
+
+    return [job for job in SEED_JOBS if is_it_sector_job(job)]
+
+
+def merge_it_seeds_into_jobs_file() -> tuple[int, int]:
+    """Append missing IT seed jobs into an existing jobs.json (no overwrite)."""
+    if not JOBS_PATH.exists():
+        n = seed_jobs_file()
+        return n, n
+
+    raw = json.loads(JOBS_PATH.read_text(encoding="utf-8"))
+    jobs_file = JobsFile.model_validate(raw)
+    existing_ids = {job.id for job in jobs_file.jobs}
+    existing_titles = {(job.title.casefold(), job.company.casefold()) for job in jobs_file.jobs}
+    added = 0
+    for seed in it_seed_jobs():
+        key = (seed.title.casefold(), seed.company.casefold())
+        if seed.id in existing_ids or key in existing_titles:
+            continue
+        jobs_file.jobs.append(seed)
+        existing_ids.add(seed.id)
+        existing_titles.add(key)
+        added += 1
+    jobs_file.scraped_at = utc_now_iso()
+    JOBS_PATH.write_text(
+        json.dumps(jobs_file.model_dump(), indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    return added, len(jobs_file.jobs)
+
+
 def main() -> None:
-    count = seed_jobs_file()
-    print(f"Wrote {count} seed jobs to {JOBS_PATH}")
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Seed or densify data/jobs.json")
+    parser.add_argument(
+        "--merge-it",
+        action="store_true",
+        help="Append curated IT seed jobs into existing jobs.json (tech-focus densify).",
+    )
+    args = parser.parse_args()
+    if args.merge_it:
+        added, total = merge_it_seeds_into_jobs_file()
+        print(f"Merged {added} IT seed jobs → {total} total in {JOBS_PATH}")
+    else:
+        count = seed_jobs_file()
+        print(f"Wrote {count} seed jobs to {JOBS_PATH}")
     print("Next: uv run python -m app.rag.ingest --reset")
 
 

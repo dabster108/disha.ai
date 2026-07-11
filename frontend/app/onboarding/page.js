@@ -112,7 +112,6 @@ export default function OnboardingPage() {
   const [error, setError] = useState(null);
   const [warnings, setWarnings] = useState([]);
   const [skillsSource, setSkillsSource] = useState("manual");
-  const [extractionMethod, setExtractionMethod] = useState(null);
 
   const [form, setForm] = useState(INITIAL_FORM);
 
@@ -154,7 +153,6 @@ export default function OnboardingPage() {
       const parsed = await uploadResume(file);
       setForm((prev) => ({ ...prev, ...applyParsedToForm(parsed) }));
       setSkillsSource("cv");
-      setExtractionMethod(parsed.extraction);
       setWarnings(parsed.parse_warnings || []);
       setStep(2);
     } catch (err) {
@@ -294,11 +292,6 @@ export default function OnboardingPage() {
               <li key={w}>{w}</li>
             ))}
           </ul>
-          {extractionMethod && (
-            <p className="mt-2 text-label-sm text-secondary">
-              Text extracted via: {extractionMethod}
-            </p>
-          )}
         </div>
       )}
 
