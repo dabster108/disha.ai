@@ -5,21 +5,28 @@ import Link from "next/link";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAdminLearning } from "@/lib/adminApi";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+
+const CACHE_KEY = "admin:learning";
 
 export default function AdminLearningPage() {
-  const [curricula, setCurricula] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const initial = readCache(CACHE_KEY);
+  const [curricula, setCurricula] = useState(initial.data || []);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = () => {
-    setLoading(true);
+    if (!curricula.length) setLoading(true);
     setError(null);
-    getAdminLearning({ limit: 100 }).then(setCurricula).catch(setError).finally(() => setLoading(false));
+    loadWithCache(CACHE_KEY, () => getAdminLearning({ limit: 100 }), CACHE_TTL.admin)
+      .then(setCurricula)
+      .catch(setError)
+      .finally(() => setLoading(false));
   };
 
   useEffect(load, []);
 
-  if (loading) return <LoadingState label="Loading curricula..." />;
+  if (loading && !curricula.length) return <LoadingState label="Loading curricula..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={load} />;
 
   return (

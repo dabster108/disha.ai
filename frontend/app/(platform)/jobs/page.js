@@ -75,8 +75,6 @@ export default function JobsPage() {
   if (loading && !data) return <LoadingState label="Finding relevant job matches..." />;
 
   const jobs = data?.matches || [];
-  const strongMatches = jobs.filter((j) => !j.relaxed_match);
-  const relaxedOnly = jobs.length > 0 && strongMatches.length === 0;
 
   return (
     <div className="min-h-screen p-12">
@@ -110,21 +108,6 @@ export default function JobsPage() {
       {error && (
         <div className="mb-8">
           <ErrorBanner message={error.message} onRetry={load} />
-        </div>
-      )}
-
-      {relaxedOnly && (
-        <div className="mb-8 rounded-xl border border-tertiary/30 bg-tertiary-fixed/20 p-5 text-sm text-on-surface">
-          <p className="flex items-center gap-2 font-semibold text-tertiary">
-            <Icon name="info" size={18} />
-            Related roles only
-          </p>
-          <p className="mt-2 text-secondary">
-            No exact <span className="font-semibold text-on-surface">{profile?.target_role}</span>{" "}
-            postings are in the current job index, so these are the closest adjacent roles (that&apos;s
-            why scores are lower). Refresh the corpus for more direct matches, or broaden your target
-            role.
-          </p>
         </div>
       )}
 

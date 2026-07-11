@@ -5,6 +5,9 @@ import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAdminStats } from "@/lib/adminApi";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+
+const STATS_KEY = "admin:stats";
 
 function StatTile({ icon, label, value, sub }) {
   return (
@@ -20,14 +23,15 @@ function StatTile({ icon, label, value, sub }) {
 }
 
 export default function AdminOverviewPage() {
-  const [stats, setStats] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const initial = readCache(STATS_KEY);
+  const [stats, setStats] = useState(initial.data);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = () => {
-    setLoading(true);
+    if (!stats) setLoading(true);
     setError(null);
-    getAdminStats()
+    loadWithCache(STATS_KEY, getAdminStats, CACHE_TTL.admin)
       .then(setStats)
       .catch(setError)
       .finally(() => setLoading(false));
@@ -35,7 +39,7 @@ export default function AdminOverviewPage() {
 
   useEffect(load, []);
 
-  if (loading) return <LoadingState label="Loading admin overview..." />;
+  if (loading && !stats) return <LoadingState label="Loading admin overview..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={load} />;
 
   const scrape = stats.latest_scrape;

@@ -5,21 +5,28 @@ import Link from "next/link";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAdminInterviews } from "@/lib/adminApi";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+
+const CACHE_KEY = "admin:interviews";
 
 export default function AdminInterviewsPage() {
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const initial = readCache(CACHE_KEY);
+  const [sessions, setSessions] = useState(initial.data || []);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = () => {
-    setLoading(true);
+    if (!sessions.length) setLoading(true);
     setError(null);
-    getAdminInterviews({ limit: 100 }).then(setSessions).catch(setError).finally(() => setLoading(false));
+    loadWithCache(CACHE_KEY, () => getAdminInterviews({ limit: 100 }), CACHE_TTL.admin)
+      .then(setSessions)
+      .catch(setError)
+      .finally(() => setLoading(false));
   };
 
   useEffect(load, []);
 
-  if (loading) return <LoadingState label="Loading interviews..." />;
+  if (loading && !sessions.length) return <LoadingState label="Loading interviews..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={load} />;
 
   return (

@@ -1,7 +1,8 @@
 """Roadmap generation from a skill gap snapshot.
 
 POST /api/roadmap reuses an existing snapshot when given (or the profile's
-latest one), computing a fresh snapshot only if none exists yet — this avoids
+latest one matching its current target_role), computing a fresh snapshot
+only if none exists yet or the student has since switched goals — this avoids
 re-running the Chroma market query and Groq narrative when the caller just
 wants a plan from data that's already been assessed.
 """
@@ -19,11 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
-from app.config import get_settings
 from app.db.models import Roadmap, SkillGapSnapshot, StudentProfile
 from app.services.learning_resources import attach_resources_to_path, attach_resources_to_weeks
 from app.services.roadmap import classify_gap_size, generate_roadmap, generate_skill_path, seed_path_progress
-from app.services.skill_gap import compute_combined_skill_gap, load_gap_context
+from app.services.skill_gap import get_or_create_current_snapshot
 
 router = APIRouter(prefix="/api", tags=["roadmap"])
 
@@ -98,34 +98,6 @@ def _roadmap_out(roadmap: Roadmap) -> RoadmapOut:
     return out.model_copy(update={"path": _annotate_node_status(roadmap.path, roadmap.progress)})
 
 
-async def _get_or_create_snapshot(db: AsyncSession, profile: StudentProfile) -> SkillGapSnapshot:
-    result = await db.execute(
-        select(SkillGapSnapshot)
-        .where(SkillGapSnapshot.profile_id == profile.id)
-        .order_by(SkillGapSnapshot.created_at.desc())
-        .limit(1)
-    )
-    snapshot = result.scalar_one_or_none()
-    if snapshot is not None:
-        return snapshot
-
-    # No snapshot yet — compute one (without narrative; the roadmap doesn't need it).
-    ctx = await load_gap_context(db, profile.id, n_jobs=get_settings().gap_n_jobs)
-    gap_data = compute_combined_skill_gap(ctx)
-    snapshot = SkillGapSnapshot(
-        profile_id=profile.id,
-        target_role=profile.target_role,
-        interview_session_id=ctx.interview.id if ctx.interview else None,
-        practice_session_id=ctx.practice.id if ctx.practice else None,
-        jobs_analyzed=gap_data["jobs_analyzed"],
-        match_ratio=gap_data["match_ratio"],
-        gap_data=gap_data,
-    )
-    db.add(snapshot)
-    await db.flush()
-    return snapshot
-
-
 @router.post("/roadmap", response_model=RoadmapOut, status_code=201)
 async def create_roadmap(payload: RoadmapRequest, db: AsyncSession = Depends(get_db)) -> Roadmap:
     profile = await db.get(StudentProfile, payload.profile_id)
@@ -137,7 +109,7 @@ async def create_roadmap(payload: RoadmapRequest, db: AsyncSession = Depends(get
         if snapshot is None or snapshot.profile_id != profile.id:
             raise HTTPException(status_code=404, detail="Skill gap snapshot not found for this profile")
     else:
-        snapshot = await _get_or_create_snapshot(db, profile)
+        snapshot = await get_or_create_current_snapshot(db, profile)
 
     gap_data = snapshot.gap_data
     gap_size = classify_gap_size(gap_data)
@@ -194,7 +166,7 @@ async def latest_roadmap(profile_id: uuid.UUID, db: AsyncSession = Depends(get_d
     # and returns almost immediately.
     result = await db.execute(
         select(Roadmap)
-        .where(Roadmap.profile_id == profile_id)
+        .where(Roadmap.profile_id == profile_id, Roadmap.status == "active")
         .order_by(Roadmap.created_at.desc())
         .limit(1)
         .with_for_update()

@@ -482,7 +482,7 @@ async def generate_skill_path(gap_data: dict, profile: StudentProfile, gap_size:
         plan = _build_plan_from_ladder(ladder, profile)
     else:
         plan = _ensure_skeleton_coverage(_plan_from_draft(draft, profile), ladder)
-    return _attach_path_resources(plan, profile.budget)
+    return await _attach_path_resources(plan, profile.budget)
 
 
 def seed_path_progress(profile: StudentProfile, gap_data: dict, plan: SkillPathPlan) -> dict:

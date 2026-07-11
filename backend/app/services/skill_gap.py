@@ -26,8 +26,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.config import get_settings
-from app.db.models import InterviewSession, PracticeSession, StudentProfile
-from app.rag.documents import infer_role_category
+from app.db.models import InterviewSession, PracticeSession, SkillGapSnapshot, StudentProfile
+from app.rag.documents import infer_role_category, is_technical_role
 from app.rag.retriever import search_jobs
 from app.services.llm_utils import call_structured
 from app.services.skills_catalog import normalize_skill as catalog_normalize_skill
@@ -106,17 +106,72 @@ def compute_profile_evidence(profile: StudentProfile) -> dict:
 # --------------------------------------------------------------------------
 
 
-def _demand_from_jobs(jobs: list[dict]) -> dict[str, dict]:
-    """Aggregate required-skill demand across a list of job postings."""
+# role_category values whose skills belong in a software-developer's market
+# demand. Deliberately EXCLUDES "design" (graphic/UI → Photoshop/Illustrator)
+# and "product" (PM → non-technical) — those aren't software-engineering roles,
+# so their skills are noise for a Backend/Frontend/Data student's gap even
+# though the retriever still treats them as broadly "tech" for ranking.
+_TECH_ROLE_CATEGORIES = frozenset({
+    "backend", "frontend", "fullstack", "software", "tech", "ml_ai", "data",
+    "devops", "mobile", "qa",
+})
+
+# Generic soft skills / non-technical domain skills that pollute market demand
+# for an IT student — they come from sales/marketing/admin postings that leak
+# into retrieval. Dropped from demand ONLY when the target role is technical.
+# This is a noise stoplist, not a new skill taxonomy. Normalized to match the
+# keys _demand_from_jobs builds.
+_SOFT_SKILL_NOISE = frozenset(
+    normalize_skill_name(s)
+    for s in (
+        "communication", "communication skills", "teamwork", "leadership",
+        "negotiation", "coordination", "time management", "multitasking",
+        "presentation", "interpersonal skills", "strong interpersonal skills",
+        "relationship-building skills", "problem solving", "management",
+        "team management", "work under pressure", "attention to detail",
+        "customer service", "documentation", "documentation and reporting",
+        "reporting", "seo", "digital marketing", "sales", "sales and marketing",
+        "marketing", "branding", "business development", "accounting",
+        "ms office suite", "excel", "autocad", "crm software",
+    )
+)
+
+
+def _demand_from_jobs(
+    jobs: list[dict], *, tech_only: bool = False, drop_soft_skills: bool = False
+) -> dict[str, dict]:
+    """Aggregate required-skill demand across a list of job postings.
+
+    For a technical target role, ``tech_only`` skips postings whose
+    role_category is non-technical (their skills are noise for an IT student)
+    and ``drop_soft_skills`` filters generic soft-skill entries — so
+    priority_learn/market_missing surface real IT skills, not
+    hygiene/cooking/sales terms.
+    """
     demand: dict[str, dict] = {}
     for job in jobs:
+        if tech_only and job.get("role_category") not in _TECH_ROLE_CATEGORIES:
+            continue
         for skill in job["required_skills"]:
             key = normalize_skill_name(skill)
             if not key:
                 continue
+            if drop_soft_skills and key in _SOFT_SKILL_NOISE:
+                continue
             entry = demand.setdefault(key, {"skill": skill.strip(), "jobs_requiring": 0})
             entry["jobs_requiring"] += 1
     return demand
+
+
+def _demand_flags(target_role: str | None) -> tuple[bool, bool]:
+    """(tech_only, drop_soft_skills) for demand aggregation, gated on the target
+    role being technical and the corresponding config toggles."""
+    settings = get_settings()
+    tech_role = is_technical_role(target_role)
+    return (
+        tech_role and settings.gap_tech_demand_tech_jobs_only,
+        tech_role and settings.gap_tech_demand_drop_soft_skills,
+    )
 
 
 def _market_demand(
@@ -124,7 +179,8 @@ def _market_demand(
 ) -> tuple[list[dict], dict[str, dict], set[str]]:
     """One Chroma query, reused by both compute_market_gap and the combined agent."""
     jobs = search_jobs(target_role, n=n_jobs)
-    demand = _demand_from_jobs(jobs)
+    tech_only, drop_soft = _demand_flags(target_role)
+    demand = _demand_from_jobs(jobs, tech_only=tech_only, drop_soft_skills=drop_soft)
     student_keys = {normalize_skill_name(s) for s in student_skills}
     return jobs, demand, student_keys
 
@@ -373,7 +429,8 @@ def compute_combined_skill_gap(ctx: GapContext) -> dict:
     )
     demand_jobs = [j for j in job_pool if j["similarity"] >= settings.min_job_similarity][: ctx.n_jobs]
     jobs = demand_jobs
-    demand = _demand_from_jobs(demand_jobs)
+    tech_only, drop_soft = _demand_flags(profile.target_role)
+    demand = _demand_from_jobs(demand_jobs, tech_only=tech_only, drop_soft_skills=drop_soft)
 
     interview_signals = merge_interview_signals(ctx.interview)
     practice_signals = merge_practice_signals(ctx.practice)
@@ -759,3 +816,39 @@ async def generate_gap_narrative(gap_data: dict, profile: StudentProfile) -> str
     llm = ChatGroq(model=settings.groq_model, temperature=0.3, api_key=settings.groq_api_key)
     result = await call_structured(llm, GapNarrative, prompt)
     return result.narrative if result is not None else _fallback_narrative(gap_data, profile)
+
+
+async def get_or_create_current_snapshot(db: AsyncSession, profile: StudentProfile) -> SkillGapSnapshot:
+    """Reuse the latest skill-gap snapshot for this profile if it was computed
+    for the student's *current* target_role; otherwise compute and persist a
+    fresh one.
+
+    Without this check, switching goals (target_role) would leave roadmap and
+    curriculum generation silently planning against gap data for the role the
+    student just switched away from — right role name in the prompt, wrong
+    skill-gap analysis underneath it.
+    """
+    result = await db.execute(
+        select(SkillGapSnapshot)
+        .where(SkillGapSnapshot.profile_id == profile.id)
+        .order_by(SkillGapSnapshot.created_at.desc())
+        .limit(1)
+    )
+    snapshot = result.scalar_one_or_none()
+    if snapshot is not None and snapshot.target_role == profile.target_role:
+        return snapshot
+
+    ctx = await load_gap_context(db, profile.id, n_jobs=get_settings().gap_n_jobs)
+    gap_data = compute_combined_skill_gap(ctx)
+    snapshot = SkillGapSnapshot(
+        profile_id=profile.id,
+        target_role=profile.target_role,
+        interview_session_id=ctx.interview.id if ctx.interview else None,
+        practice_session_id=ctx.practice.id if ctx.practice else None,
+        jobs_analyzed=gap_data["jobs_analyzed"],
+        match_ratio=gap_data["match_ratio"],
+        gap_data=gap_data,
+    )
+    db.add(snapshot)
+    await db.flush()
+    return snapshot

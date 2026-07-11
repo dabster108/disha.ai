@@ -20,9 +20,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
-from app.db.models import LearningCurriculum, Roadmap, SkillGapSnapshot, StudentProfile
+from app.db.models import LearningCurriculum, Roadmap, StudentProfile
 from app.orchestrator.tools.learning import get_roadmap_skeleton_tool
 from app.services.learning_agent import generate_curriculum
+from app.services.skill_gap import get_or_create_current_snapshot
 
 router = APIRouter(prefix="/api/learning", tags=["learning"])
 
@@ -58,18 +59,6 @@ async def _get_profile_or_404(db: AsyncSession, profile_id: uuid.UUID) -> Studen
     return profile
 
 
-async def _latest_gap_data(db: AsyncSession, profile_id: uuid.UUID) -> dict:
-    snapshot = (
-        await db.execute(
-            select(SkillGapSnapshot)
-            .where(SkillGapSnapshot.profile_id == profile_id)
-            .order_by(SkillGapSnapshot.created_at.desc())
-            .limit(1)
-        )
-    ).scalar_one_or_none()
-    return snapshot.gap_data if snapshot and snapshot.gap_data else {}
-
-
 @router.post("/generate", response_model=CurriculumOut, status_code=201)
 async def generate(payload: GenerateRequest, db: AsyncSession = Depends(get_db)) -> LearningCurriculum:
     profile = await _get_profile_or_404(db, payload.profile_id)
@@ -86,7 +75,12 @@ async def generate(payload: GenerateRequest, db: AsyncSession = Depends(get_db))
         if existing is not None:
             return existing
 
-    gap_data = await _latest_gap_data(db, profile.id)
+    # get_or_create_current_snapshot recomputes if the latest snapshot was
+    # for a role the student has since switched away from — otherwise a
+    # freshly generated curriculum would silently reuse the old role's gap
+    # data (right role name, wrong priority skills underneath it).
+    snapshot = await get_or_create_current_snapshot(db, profile)
+    gap_data = snapshot.gap_data or {}
     roadmap_skeleton = await get_roadmap_skeleton_tool.ainvoke({"profile_id": str(profile.id)})
     plan = await generate_curriculum(profile, gap_data, roadmap_skeleton)
 

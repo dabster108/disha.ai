@@ -6,6 +6,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import { getAdminStats } from "@/lib/adminApi";
+import { CACHE_TTL, loadWithCache } from "@/lib/resource-cache";
 import logo from "@/components/images/logo.png";
 
 const NAV = [
@@ -44,7 +45,10 @@ export default function AdminLayout({ children }) {
       setStatus("unconfigured");
       return;
     }
-    getAdminStats()
+    // Shares the "admin:stats" cache key with the Overview page — whichever
+    // of the two fires first wins, so this reachability check never doubles
+    // up an identical request against the same (non-trivial) stats query.
+    loadWithCache("admin:stats", getAdminStats, CACHE_TTL.admin)
       .then(() => setStatus("ok"))
       .catch((err) => {
         setErrorDetail(err?.message || "Could not reach the admin API");

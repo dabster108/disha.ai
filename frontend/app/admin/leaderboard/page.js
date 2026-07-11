@@ -5,24 +5,28 @@ import Link from "next/link";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getLeaderboard } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+
+const CACHE_KEY = "admin:leaderboard";
 
 export default function AdminLeaderboardPage() {
-  const [entries, setEntries] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const initial = readCache(CACHE_KEY);
+  const [entries, setEntries] = useState(initial.data || []);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = () => {
-    setLoading(true);
+    if (!entries.length) setLoading(true);
     setError(null);
-    getLeaderboard(null, 200)
-      .then((res) => setEntries(res.entries || []))
+    loadWithCache(CACHE_KEY, () => getLeaderboard(null, 200).then((res) => res.entries || []), CACHE_TTL.admin)
+      .then(setEntries)
       .catch(setError)
       .finally(() => setLoading(false));
   };
 
   useEffect(load, []);
 
-  if (loading) return <LoadingState label="Loading leaderboard..." />;
+  if (loading && !entries.length) return <LoadingState label="Loading leaderboard..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={load} />;
 
   return (

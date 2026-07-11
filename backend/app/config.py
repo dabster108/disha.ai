@@ -60,6 +60,16 @@ class Settings(BaseSettings):
     job_search_title_boost: float = 0.22
     job_search_skill_boost: float = 0.13
     job_search_category_boost: float = 0.10
+    # For a technical (IT) query, how hard to push down a posting whose TITLE is
+    # clearly non-technical (sales/nurse/receptionist/civil-engineer) even if its
+    # scraped skills carry noisy tech tokens. Defense-in-depth on top of the
+    # role-category classifier so a mis-tagged posting can't rank for an IT role.
+    job_search_nontech_title_penalty: float = 0.30
+    # When aggregating market demand for a technical target role, ignore
+    # postings whose role_category is non-technical (their skills are noise for
+    # an IT student), and drop generic soft-skill entries from the demand tally.
+    gap_tech_demand_tech_jobs_only: bool = True
+    gap_tech_demand_drop_soft_skills: bool = True
 
     # Multi-factor job matching
     job_match_max_results: int = 8

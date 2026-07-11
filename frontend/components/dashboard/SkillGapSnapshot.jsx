@@ -2,22 +2,7 @@
 
 import Link from "next/link";
 import Icon from "@/components/ui/Icon";
-import { cn } from "@/lib/utils";
-
-const CONFIDENCE_STYLE = {
-  high: { cls: "bg-green-100 text-green-700", label: "High" },
-  medium: { cls: "bg-primary/10 text-primary", label: "Medium" },
-  low: { cls: "bg-tertiary-fixed text-on-tertiary-fixed", label: "Low" },
-};
-
-function ConfidenceBadge({ level }) {
-  const style = CONFIDENCE_STYLE[level] || CONFIDENCE_STYLE.low;
-  return (
-    <span className={cn("rounded-full px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide", style.cls)}>
-      {style.label}
-    </span>
-  );
-}
+import ConfidenceBadge from "@/components/skill-gap/ConfidenceBadge";
 
 /**
  * Mini skill-gap overview — reuses the same fields as the full Skill Gap page,
@@ -52,7 +37,7 @@ export default function SkillGapSnapshot({
   return (
     <div className="rounded-2xl border border-outline-variant bg-white p-6">
       <div className="mb-5 flex items-center justify-between">
-        <h3 className="text-headline-sm font-bold text-on-surface">Skill Gap Snapshot</h3>
+        <h3 className="text-headline-sm font-bold text-on-surface">Your readiness</h3>
         {confidence && <ConfidenceBadge level={confidence} />}
       </div>
 
@@ -68,14 +53,14 @@ export default function SkillGapSnapshot({
           emptyText="No verified strengths yet — take an interview to prove skills."
         />
         <SnapshotColumn
-          title="Priority Skills"
+          title="Learn Next"
           icon="priority_high"
           tone="text-primary"
           items={prioritySkills.map((s) => ({
             label: s.skill,
             meta: `Priority ${s.priority_score ?? "—"}`,
           }))}
-          emptyText="No priority skills — you're well matched to the market."
+          emptyText="Nothing to learn next — you're well matched to the market."
         />
         <SnapshotColumn
           title="Missing in Market"

@@ -14,6 +14,7 @@ from app.rag.documents import (
     normalize_search_query,
     role_category_match,
     skill_overlap_score,
+    title_is_non_technical,
     title_overlap_score,
 )
 from app.rag.embeddings import get_embedder
@@ -74,6 +75,13 @@ def _hybrid_score(
     }
 
     if is_technical_query(query) and not is_non_technical_query(query):
+        # A posting whose TITLE is clearly non-technical (sales/nurse/civil
+        # engineer) is noise for an IT query even when its scraped skills carry
+        # tech tokens — push it below the retrieval threshold rather than let
+        # it pollute market demand. Skip when the title genuinely overlaps the
+        # query (title_score > 0) so real matches aren't punished.
+        if title_score == 0.0 and title_is_non_technical(title):
+            score -= settings.job_search_nontech_title_penalty
         if category == "general" and title_score == 0.0 and skill_score == 0.0:
             score -= 0.12
         if category in _TECH_CATEGORIES:

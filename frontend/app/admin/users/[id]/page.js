@@ -6,6 +6,7 @@ import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAdminUserDossier, updateVerification } from "@/lib/adminApi";
+import { CACHE_TTL, loadWithCache, readCache, writeCache } from "@/lib/resource-cache";
 
 const STATUS_OPTIONS = [
   { value: "verified", label: "Mark Verified", cls: "bg-green-600 hover:bg-green-700" },
@@ -27,16 +28,18 @@ function Section({ title, icon, children }) {
 
 export default function AdminUserDossierPage({ params }) {
   const { id } = use(params);
-  const [dossier, setDossier] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `admin:user:${id}`;
+  const initial = readCache(cacheKey);
+  const [dossier, setDossier] = useState(initial.data);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
-  const [notes, setNotes] = useState("");
+  const [notes, setNotes] = useState(initial.data?.verification?.notes || "");
   const [saving, setSaving] = useState(false);
 
   const load = () => {
-    setLoading(true);
+    if (!dossier) setLoading(true);
     setError(null);
-    getAdminUserDossier(id)
+    loadWithCache(cacheKey, () => getAdminUserDossier(id), CACHE_TTL.adminDetail)
       .then((d) => {
         setDossier(d);
         setNotes(d.verification?.notes || "");
@@ -51,7 +54,13 @@ export default function AdminUserDossierPage({ params }) {
     setSaving(true);
     try {
       const v = await updateVerification(id, status, notes);
-      setDossier((d) => ({ ...d, verification: v }));
+      setDossier((d) => {
+        const updated = { ...d, verification: v };
+        // Write straight through so a revisit within the TTL window doesn't
+        // show the pre-update verification status from cache.
+        writeCache(cacheKey, updated, CACHE_TTL.adminDetail);
+        return updated;
+      });
     } catch (err) {
       setError(err);
     } finally {
@@ -59,7 +68,7 @@ export default function AdminUserDossierPage({ params }) {
     }
   };
 
-  if (loading) return <LoadingState label="Loading dossier..." />;
+  if (loading && !dossier) return <LoadingState label="Loading dossier..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={load} />;
   if (!dossier) return null;
 

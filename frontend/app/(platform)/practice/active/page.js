@@ -82,7 +82,7 @@ export default function ActivePracticePage() {
           </div>
           <div className="flex gap-4">
             <Link href="/skill-gap" className="rounded-xl bg-primary px-6 py-3 font-bold text-on-primary">
-              Run Skill Gap
+              Back to Skill Gap
             </Link>
             <Link
               href="/practice"

@@ -12,6 +12,13 @@ export const CACHE_TTL = {
   practice: 60_000,
   practiceSuggest: 120_000,
   jobs: 120_000,
+  // Admin dashboard — short TTLs since an admin actively monitoring the
+  // platform wants reasonably live data, but this still kills the "every
+  // tab switch re-fetches from scratch and blanks the page" lag.
+  admin: 30_000,
+  adminDetail: 20_000,
+  // The skills catalog is a versioned static file, not live activity data.
+  adminCatalog: 300_000,
 };
 
 /**

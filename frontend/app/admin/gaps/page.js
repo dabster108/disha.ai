@@ -5,21 +5,28 @@ import Link from "next/link";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAdminGaps } from "@/lib/adminApi";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+
+const CACHE_KEY = "admin:gaps";
 
 export default function AdminGapsPage() {
-  const [snapshots, setSnapshots] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const initial = readCache(CACHE_KEY);
+  const [snapshots, setSnapshots] = useState(initial.data || []);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = () => {
-    setLoading(true);
+    if (!snapshots.length) setLoading(true);
     setError(null);
-    getAdminGaps({ limit: 100 }).then(setSnapshots).catch(setError).finally(() => setLoading(false));
+    loadWithCache(CACHE_KEY, () => getAdminGaps({ limit: 100 }), CACHE_TTL.admin)
+      .then(setSnapshots)
+      .catch(setError)
+      .finally(() => setLoading(false));
   };
 
   useEffect(load, []);
 
-  if (loading) return <LoadingState label="Loading skill gap snapshots..." />;
+  if (loading && !snapshots.length) return <LoadingState label="Loading skill gap snapshots..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={load} />;
 
   return (

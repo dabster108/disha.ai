@@ -22,16 +22,22 @@ const DATASET_SKILLS = [
   "Data Science",
 ];
 
+const SCORE_TONE = (pct) =>
+  pct >= 70 ? "bg-green-500" : pct >= 40 ? "bg-primary" : "bg-tertiary";
+
 function ScoreBar({ label, value }) {
   const pct = Math.round((value ?? 0) * 100);
   return (
     <div>
-      <div className="mb-1 flex items-center justify-between text-xs text-secondary">
+      <div className="mb-1.5 flex items-center justify-between text-xs text-secondary">
         <span>{label}</span>
         <span className="font-bold text-on-surface">{pct}%</span>
       </div>
-      <div className="h-1.5 w-full rounded-full bg-surface-container-low">
-        <div className="h-full rounded-full bg-primary" style={{ width: `${pct}%` }} />
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-surface-container-low">
+        <div
+          className={`h-full rounded-full transition-all duration-700 ease-out ${SCORE_TONE(pct)}`}
+          style={{ width: `${pct}%` }}
+        />
       </div>
     </div>
   );
@@ -95,24 +101,18 @@ export default function RecommendationLabPage() {
         Back to Jobs
       </Link>
 
-      <div className="mb-8 flex items-start gap-3 rounded-2xl border border-tertiary/30 bg-tertiary-fixed/15 p-5">
-        <Icon name="science" className="mt-0.5 shrink-0 text-tertiary" />
-        <div>
-          <p className="text-label-md font-bold text-on-surface">
-            Synthetic Recommendation Lab — not Nepal job postings
-          </p>
-          <p className="mt-1 text-sm text-secondary">
-            This uses a public 100k-row benchmark dataset (500 generic jobs, a fixed 10-skill
-            vocabulary) to demo content-based scoring, separately from your real job matches on
-            the main Jobs page.
-          </p>
+      <header className="mb-10 mask-reveal">
+        <div className="flex flex-wrap items-center gap-3">
+          <h1 className="text-display-lg text-on-surface">Recommendation Lab</h1>
+          <span className="inline-flex items-center gap-1.5 rounded-full bg-tertiary/10 px-3 py-1 text-label-sm font-bold uppercase tracking-wide text-tertiary">
+            <Icon name="science" size={14} />
+            Benchmark demo
+          </span>
         </div>
-      </div>
-
-      <header className="mb-10">
-        <h1 className="text-display-lg text-on-surface">Recommendation Lab</h1>
-        <p className="mt-2 max-w-2xl text-body-lg text-secondary">
-          Pick skills, get ranked recommendations scored purely on skill overlap.
+        <p className="mt-3 max-w-2xl text-body-lg text-secondary">
+          Pick skills, get ranked recommendations scored purely on skill overlap — a live look at
+          how our content-based scorer works, run against a public benchmark dataset rather than
+          your real Nepal job matches on the main <Link href="/jobs" className="font-semibold text-primary hover:underline">Jobs</Link> page.
         </p>
       </header>
 
@@ -122,9 +122,22 @@ export default function RecommendationLabPage() {
         </div>
       )}
 
-      <section className="mb-10 rounded-2xl border border-outline-variant bg-white p-8">
-        <h3 className="mb-4 text-label-md font-bold text-on-surface">Select skills ({selected.length})</h3>
-        <div className="mb-6 flex flex-wrap gap-3">
+      <section className="mb-10 rounded-2xl border border-outline-variant bg-white p-8 mask-reveal">
+        <div className="mb-5 flex items-center justify-between">
+          <h3 className="text-label-md font-bold uppercase tracking-wider text-secondary">
+            Select skills <span className="text-primary">({selected.length})</span>
+          </h3>
+          {selected.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setSelected([])}
+              className="text-label-sm font-bold text-secondary hover:text-primary"
+            >
+              Clear
+            </button>
+          )}
+        </div>
+        <div className="mb-7 flex flex-wrap gap-3">
           {DATASET_SKILLS.map((skill) => {
             const active = selected.includes(skill);
             return (
@@ -132,7 +145,7 @@ export default function RecommendationLabPage() {
                 key={skill}
                 type="button"
                 onClick={() => toggleSkill(skill)}
-                className={`rounded-full border px-5 py-2.5 text-label-md transition-all ${
+                className={`rounded-full border px-5 py-2.5 text-label-md transition-all active:scale-95 ${
                   active
                     ? "border-primary bg-primary text-on-primary font-bold shadow-md shadow-primary/20"
                     : "border-outline-variant text-on-surface hover:bg-surface-container-low"
@@ -147,8 +160,9 @@ export default function RecommendationLabPage() {
           type="button"
           onClick={runRecommend}
           disabled={loading || selected.length === 0}
-          className="rounded-xl bg-primary px-8 py-3.5 text-label-md font-bold text-on-primary transition-all hover:bg-primary-container disabled:opacity-60"
+          className="flex items-center gap-2 rounded-xl bg-primary px-8 py-3.5 text-label-md font-bold text-on-primary transition-all hover:bg-primary-container active:scale-[0.98] disabled:opacity-60"
         >
+          {loading && <Icon name="progress_activity" size={18} className="animate-spin" />}
           {loading ? "Scoring..." : "Get Recommendations"}
         </button>
       </section>
@@ -157,24 +171,38 @@ export default function RecommendationLabPage() {
         <p className="mb-8 text-sm text-secondary">Select at least one skill to get recommendations.</p>
       )}
 
+      {!matches && !loading && (
+        <div className="mb-12 flex flex-col items-center gap-3 rounded-2xl border border-dashed border-outline-variant bg-surface-container-low p-14 text-center">
+          <Icon name="query_stats" size={28} className="text-secondary" />
+          <p className="text-body-md text-secondary">
+            Select skills above and run the scorer to see ranked matches.
+          </p>
+        </div>
+      )}
+
       {matches && matches.length > 0 && (
         <section className="mb-12 space-y-4">
           <h3 className="text-headline-md text-on-surface">Top Matches</h3>
-          {matches.map((job) => (
-            <div key={job.job_id} className="rounded-2xl border border-outline-variant bg-white p-6">
+          {matches.map((job, i) => (
+            <div
+              key={job.job_id}
+              className="card-hover stagger-fade-in rounded-2xl border border-outline-variant bg-white p-6 transition-all"
+              style={{ animationDelay: `${Math.min(i, 6) * 50}ms` }}
+            >
               <div className="mb-4 flex items-start justify-between gap-4">
-                <div>
+                <div className="min-w-0">
                   <p className="text-label-sm uppercase tracking-wider text-secondary">Job #{job.job_id}</p>
                   <p className="text-body-lg font-bold text-on-surface">{job.job_requirements}</p>
                 </div>
                 {job.dataset_recommended && (
-                  <span className="shrink-0 rounded-full bg-green-100 px-3 py-1 text-xs font-bold uppercase text-green-700">
+                  <span className="flex shrink-0 items-center gap-1 rounded-full bg-green-100 px-3 py-1 text-xs font-bold uppercase text-green-700">
+                    <Icon name="check_circle" size={13} />
                     Dataset: Recommended
                   </span>
                 )}
               </div>
 
-              <div className="mb-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="mb-4 grid grid-cols-1 gap-4 rounded-xl bg-surface-container-lowest p-4 sm:grid-cols-2">
                 <ScoreBar label="Our content score" value={job.our_score} />
                 <ScoreBar label="Dataset avg. Match_Score" value={job.dataset_match_score} />
               </div>
@@ -183,7 +211,8 @@ export default function RecommendationLabPage() {
 
               <div className="flex flex-wrap gap-2">
                 {job.matched_skills.map((s) => (
-                  <span key={s} className="rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                  <span key={s} className="flex items-center gap-1 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+                    <Icon name="check" size={12} />
                     {s}
                   </span>
                 ))}
@@ -201,42 +230,48 @@ export default function RecommendationLabPage() {
         </section>
       )}
 
-      <section className="rounded-2xl border border-outline-variant bg-surface-container-lowest p-8">
-        <div className="mb-4 flex items-center justify-between">
-          <div>
-            <h3 className="text-headline-md text-on-surface">Benchmark Eval</h3>
-            <p className="text-sm text-secondary">
-              Compares our content score against this dataset&apos;s own labels.
-            </p>
+      <section className="rounded-2xl border border-outline-variant bg-surface-container-lowest p-8 mask-reveal">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <Icon name="analytics" size={20} />
+            </div>
+            <div>
+              <h3 className="text-headline-md text-on-surface">Benchmark Eval</h3>
+              <p className="text-sm text-secondary">
+                Compares our content score against this dataset&apos;s own labels.
+              </p>
+            </div>
           </div>
           <button
             type="button"
             onClick={runEval}
             disabled={evalLoading}
-            className="shrink-0 rounded-xl border border-outline-variant px-5 py-2.5 text-label-md font-bold text-on-surface hover:bg-white disabled:opacity-60"
+            className="flex shrink-0 items-center gap-2 rounded-xl border border-outline-variant bg-white px-5 py-2.5 text-label-md font-bold text-on-surface transition-colors hover:bg-surface-container-low disabled:opacity-60"
           >
+            {evalLoading && <Icon name="progress_activity" size={16} className="animate-spin" />}
             {evalLoading ? "Running..." : "Run Evaluation"}
           </button>
         </div>
 
         {evalResult && (
-          <div>
+          <div className="mask-reveal">
             <div className="mb-4 grid grid-cols-2 gap-4">
-              <div className="rounded-xl border border-outline-variant bg-white p-4 text-center">
-                <p className="text-headline-md font-bold text-on-surface">{evalResult.mae}</p>
-                <p className="text-xs text-secondary">
+              <div className="rounded-xl border border-outline-variant bg-white p-5 text-center">
+                <p className="text-headline-lg font-bold text-on-surface">{evalResult.mae}</p>
+                <p className="mt-1 text-xs text-secondary">
                   MAE vs Match_Score ({evalResult.sample_size} rows)
                 </p>
               </div>
-              <div className="rounded-xl border border-outline-variant bg-white p-4 text-center">
-                <p className="text-headline-md font-bold text-on-surface">
+              <div className="rounded-xl border border-outline-variant bg-white p-5 text-center">
+                <p className="text-headline-lg font-bold text-on-surface">
                   {Math.round((evalResult.precision_when_recommended ?? 0) * 100)}%
                 </p>
-                <p className="text-xs text-secondary">Precision vs Recommended=1</p>
+                <p className="mt-1 text-xs text-secondary">Precision vs Recommended=1</p>
               </div>
             </div>
-            <p className="rounded-xl border border-tertiary/30 bg-tertiary-fixed/15 p-4 text-sm text-on-surface">
-              <Icon name="info" size={16} className="mr-1.5 inline text-tertiary" />
+            <p className="flex items-start gap-2 rounded-xl bg-white p-4 text-sm text-secondary">
+              <Icon name="info" size={16} className="mt-0.5 shrink-0 text-secondary" />
               {evalResult.note}
             </p>
           </div>

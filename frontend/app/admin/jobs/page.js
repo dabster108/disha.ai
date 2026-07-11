@@ -5,21 +5,28 @@ import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getJobCorpusStatus } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+
+const CACHE_KEY = "admin:jobs-corpus";
 
 export default function AdminJobsPage() {
-  const [status, setStatus] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const initial = readCache(CACHE_KEY);
+  const [status, setStatus] = useState(initial.data);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = () => {
-    setLoading(true);
+    if (!status) setLoading(true);
     setError(null);
-    getJobCorpusStatus().then(setStatus).catch(setError).finally(() => setLoading(false));
+    loadWithCache(CACHE_KEY, getJobCorpusStatus, CACHE_TTL.admin)
+      .then(setStatus)
+      .catch(setError)
+      .finally(() => setLoading(false));
   };
 
   useEffect(load, []);
 
-  if (loading) return <LoadingState label="Loading corpus status..." />;
+  if (loading && !status) return <LoadingState label="Loading corpus status..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={load} />;
 
   return (

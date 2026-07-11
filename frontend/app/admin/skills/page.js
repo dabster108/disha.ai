@@ -4,18 +4,25 @@ import { useEffect, useState } from "react";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getSkillsCatalog } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+
+const CACHE_KEY = "admin:skills-catalog";
 
 export default function AdminSkillsPage() {
-  const [catalog, setCatalog] = useState(null);
+  const initial = readCache(CACHE_KEY);
+  const [catalog, setCatalog] = useState(initial.data);
   const [q, setQ] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    getSkillsCatalog().then(setCatalog).catch(setError).finally(() => setLoading(false));
+    loadWithCache(CACHE_KEY, getSkillsCatalog, CACHE_TTL.adminCatalog)
+      .then(setCatalog)
+      .catch(setError)
+      .finally(() => setLoading(false));
   }, []);
 
-  if (loading) return <LoadingState label="Loading skills catalog..." />;
+  if (loading && !catalog) return <LoadingState label="Loading skills catalog..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={() => window.location.reload()} />;
 
   const roles = Object.entries(catalog.roles).filter(([name]) => name.toLowerCase().includes(q.toLowerCase()));

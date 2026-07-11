@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import LoadingState from "@/components/ui/LoadingState";
@@ -10,10 +10,24 @@ import Icon from "@/components/ui/Icon";
 import { useProfile } from "@/context/ProfileContext";
 import { getPracticeHistory, startPractice, suggestPracticeSkills } from "@/lib/api";
 import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+import { normalizeSkillKey } from "@/lib/skills-catalog";
 import SessionDurationPicker from "@/components/practice/SessionDurationPicker";
 
 const DIFFICULTIES = ["auto", "easy", "medium", "hard"];
 const MAX_SKILLS = 3;
+
+/** Dedup by normalized key, preserving order — first list wins the display name. */
+function dedupeSkills(...lists) {
+  const seen = new Set();
+  const merged = [];
+  for (const skill of lists.flat()) {
+    const key = normalizeSkillKey(skill);
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    merged.push(skill);
+  }
+  return merged;
+}
 
 export default function PracticePage() {
   const { profileId, profile } = useProfile();
@@ -25,9 +39,22 @@ export default function PracticePage() {
   const initialSuggest = readCache(suggestKey);
   const initialHistory = readCache(historyKey);
 
+  // Skills handed off from Skill Gap's "Practice top 3" — these must be
+  // practiceable even when they're market gaps that never made it onto the
+  // CV (so they won't be in `suggested`, which is CV/role-based).
+  const gapSkillsParam = searchParams.get("skills");
+  const gapSkills = useMemo(
+    () => (gapSkillsParam ? gapSkillsParam.split(",").map((s) => s.trim()).filter(Boolean).slice(0, MAX_SKILLS) : []),
+    [gapSkillsParam]
+  );
+
   const [suggested, setSuggested] = useState(initialSuggest.data?.suggested_skills || []);
   const [track, setTrack] = useState(initialSuggest.data?.track ?? null);
-  const [selected, setSelected] = useState([]);
+  // Seeded from the same merge logic `load()` uses, so a cached revisit
+  // doesn't flash "nothing selected" before the effect resolves.
+  const [selected, setSelected] = useState(() =>
+    dedupeSkills(gapSkills, initialSuggest.data?.suggested_skills || []).slice(0, MAX_SKILLS)
+  );
   const [difficulty, setDifficulty] = useState("auto");
   const [history, setHistory] = useState(initialHistory.data || []);
   const [durationMinutes, setDurationMinutes] = useState(15);
@@ -35,6 +62,10 @@ export default function PracticePage() {
   const [loading, setLoading] = useState(!initialSuggest.data && !initialHistory.data);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState(null);
+
+  // Gap skills always shown first, so a market-gap skill that isn't on the
+  // CV still gets a chip — never silently dropped.
+  const pickerSkills = useMemo(() => dedupeSkills(gapSkills, suggested), [gapSkills, suggested]);
 
   const load = async () => {
     if (!profileId) return;
@@ -47,10 +78,9 @@ export default function PracticePage() {
       ]);
       setSuggested(suggestion.suggested_skills);
       setTrack(suggestion.track);
-      const preselectParam = searchParams.get("skills");
-      const preselect = preselectParam
-        ? preselectParam.split(",").map((s) => s.trim()).filter(Boolean).slice(0, MAX_SKILLS)
-        : suggestion.suggested_skills.slice(0, MAX_SKILLS);
+      // Gap skills first, then fill remaining slots with suggestions —
+      // never just an either/or, so 2 gap skills + 1 suggestion is possible.
+      const preselect = dedupeSkills(gapSkills, suggestion.suggested_skills).slice(0, MAX_SKILLS);
       setSelected(preselect);
       setHistory(pastSessions);
     } catch (err) {
@@ -108,7 +138,16 @@ export default function PracticePage() {
         </div>
       )}
 
-      {suggested.length === 0 ? (
+      {gapSkills.length > 0 && (
+        <div className="mb-8 flex items-center gap-3 rounded-xl border border-primary/20 bg-primary/5 p-5">
+          <Icon name="insights" className="shrink-0 text-primary" />
+          <p className="text-body-md text-on-surface">
+            <span className="font-bold">From your skill gap</span> — practice these next.
+          </p>
+        </div>
+      )}
+
+      {pickerSkills.length === 0 ? (
         <EmptyState
           icon="sports_esports"
           title="No skills to practice yet"
@@ -120,7 +159,7 @@ export default function PracticePage() {
             Choose skills ({selected.length}/{MAX_SKILLS})
           </h3>
           <div className="mb-8 flex flex-wrap gap-3">
-            {suggested.map((skill) => {
+            {pickerSkills.map((skill) => {
               const active = selected.includes(skill);
               return (
                 <button
@@ -174,10 +213,12 @@ export default function PracticePage() {
                   <span className="w-1.5 h-1.5 rounded-full bg-primary" />
                   Experience: <span className="font-bold text-on-surface ml-1">{profile.years_of_experience != null ? `${profile.years_of_experience} years` : "0 years"}</span>
                 </li>
-                <li className="flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-primary" />
-                  Suggested: <span className="font-bold text-on-surface ml-1">{suggested.slice(0, 3).join(", ")}</span>
-                </li>
+                {suggested.length > 0 && (
+                  <li className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full bg-primary" />
+                    Suggested: <span className="font-bold text-on-surface ml-1">{suggested.slice(0, 3).join(", ")}</span>
+                  </li>
+                )}
               </ul>
             </div>
           )}

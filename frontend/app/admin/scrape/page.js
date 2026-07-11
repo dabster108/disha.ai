@@ -5,28 +5,38 @@ import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getScrapeRuns, getSourceRanking, triggerScrape } from "@/lib/adminApi";
+import { CACHE_TTL, invalidateCache, loadWithCache, readCache } from "@/lib/resource-cache";
 
 const MODES = ["hybrid", "aggregator", "direct"];
+const CACHE_KEY = "admin:scrape";
 
 export default function AdminScrapePage() {
-  const [runs, setRuns] = useState([]);
-  const [ranking, setRanking] = useState(null);
+  const initial = readCache(CACHE_KEY);
+  const [runs, setRuns] = useState(initial.data?.runs || []);
+  const [ranking, setRanking] = useState(initial.data?.ranking ?? null);
   const [mode, setMode] = useState("hybrid");
   const [maxPerSource, setMaxPerSource] = useState(150);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initial.data);
   const [triggering, setTriggering] = useState(false);
   const [error, setError] = useState(null);
   const [message, setMessage] = useState(null);
 
+  const fetchScrapeData = async () => {
+    const [runsRes, rankRes] = await Promise.allSettled([getScrapeRuns(20), getSourceRanking()]);
+    if (runsRes.status === "rejected") throw runsRes.reason;
+    return { runs: runsRes.value, ranking: rankRes.status === "fulfilled" ? rankRes.value : null };
+  };
+
   const load = () => {
-    setLoading(true);
+    if (!runs.length) setLoading(true);
     setError(null);
-    Promise.allSettled([getScrapeRuns(20), getSourceRanking()]).then(([runsRes, rankRes]) => {
-      if (runsRes.status === "fulfilled") setRuns(runsRes.value);
-      else setError(runsRes.reason);
-      if (rankRes.status === "fulfilled") setRanking(rankRes.value);
-      setLoading(false);
-    });
+    loadWithCache(CACHE_KEY, fetchScrapeData, CACHE_TTL.admin)
+      .then((data) => {
+        setRuns(data.runs);
+        setRanking(data.ranking);
+      })
+      .catch(setError)
+      .finally(() => setLoading(false));
   };
 
   useEffect(load, []);
@@ -38,7 +48,12 @@ export default function AdminScrapePage() {
     try {
       const res = await triggerScrape({ mode, max_per_source: Number(maxPerSource), reingest_chroma: true });
       setMessage(`Scrape started — run ${res.scrape_run_id}`);
-      setTimeout(load, 2000);
+      // A new run just started — the cached list is now stale, so force a
+      // real re-fetch instead of the ~30s TTL silently hiding it.
+      setTimeout(() => {
+        invalidateCache(CACHE_KEY);
+        load();
+      }, 2000);
     } catch (err) {
       setError(err);
     } finally {

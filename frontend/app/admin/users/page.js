@@ -6,6 +6,7 @@ import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { getAdminUsers } from "@/lib/adminApi";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 
 const STATUS_STYLE = {
   verified: "bg-green-100 text-green-700",
@@ -31,16 +32,19 @@ function ActivityDot({ on, label }) {
   );
 }
 
+const cacheKeyFor = (query) => `admin:users:${query || ""}`;
+
 export default function AdminUsersPage() {
-  const [users, setUsers] = useState([]);
+  const initial = readCache(cacheKeyFor(""));
+  const [users, setUsers] = useState(initial.data || []);
   const [q, setQ] = useState("");
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = (query) => {
-    setLoading(true);
+    if (!users.length) setLoading(true);
     setError(null);
-    getAdminUsers({ limit: 100, q: query })
+    loadWithCache(cacheKeyFor(query), () => getAdminUsers({ limit: 100, q: query }), CACHE_TTL.admin)
       .then(setUsers)
       .catch(setError)
       .finally(() => setLoading(false));

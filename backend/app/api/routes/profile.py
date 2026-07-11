@@ -6,11 +6,11 @@ from typing import Literal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
-from app.db.models import StudentProfile, User
+from app.db.models import LearningCurriculum, Roadmap, StudentProfile, User
 from app.services.cv_parser import EducationEntry, ExperienceEntry, extract_text, parse_cv
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
@@ -271,6 +271,30 @@ async def get_profile(student_id: uuid.UUID, db: AsyncSession = Depends(get_db))
     return profile
 
 
+async def _invalidate_plans_for_new_goal(db: AsyncSession, profile_id: uuid.UUID) -> None:
+    """Mark the profile's active roadmap/curriculum as superseded when its
+    target_role changes, so old-goal content stops being served.
+
+    Both GET endpoints already filter to status == "active" (roadmap.py's
+    latest_roadmap, learning.py's latest), so this alone hides the stale
+    plan immediately: the roadmap page 404s and auto-regenerates for the new
+    goal, and the learning page falls back to its normal "no curriculum yet"
+    prompt. The underlying skill-gap snapshot isn't touched here — it's
+    recomputed lazily, on demand, by get_or_create_current_snapshot() the
+    next time a roadmap/curriculum is actually generated.
+    """
+    await db.execute(
+        update(Roadmap)
+        .where(Roadmap.profile_id == profile_id, Roadmap.status == "active")
+        .values(status="replanned")
+    )
+    await db.execute(
+        update(LearningCurriculum)
+        .where(LearningCurriculum.profile_id == profile_id, LearningCurriculum.status == "active")
+        .values(status="replanned")
+    )
+
+
 @router.patch("/{student_id}", response_model=ProfileOut)
 async def update_profile(
     student_id: uuid.UUID,
@@ -291,6 +315,8 @@ async def update_profile(
     profile_meta = data.pop("profile_meta", None)
     settings_meta = data.pop("settings_meta", None)
 
+    goal_changed = "target_role" in data and data["target_role"] and data["target_role"] != profile.target_role
+
     for field, value in data.items():
         setattr(profile, field, value)
 
@@ -298,6 +324,9 @@ async def update_profile(
         profile.profile_meta = _deep_merge(profile.profile_meta or {}, profile_meta)
     if settings_meta is not None:
         profile.settings_meta = _deep_merge(profile.settings_meta or {}, settings_meta)
+
+    if goal_changed:
+        await _invalidate_plans_for_new_goal(db, profile.id)
 
     await db.commit()
     await db.refresh(profile)

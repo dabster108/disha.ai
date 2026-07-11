@@ -149,6 +149,29 @@ _DOMAIN_ALIASES: dict[str, list[str]] = {
     "legal": ["legal officer", "compliance officer"],
 }
 
+_TECH_DOMAINS = frozenset({
+    "frontend", "backend", "fullstack", "mobile", "ios", "android", "devops",
+    "ml_ai", "data", "qa", "product", "design",
+    "php", "python", "nodejs", "fastapi", "django", "flask", "laravel",
+    "react", "vue", "angular", "swift", "flutter",
+})
+_NON_TECH_DOMAINS = frozenset({
+    "nursing", "healthcare", "education", "hospitality", "finance", "banking",
+    "marketing", "sales", "hr", "business", "admin", "logistics", "ngo", "legal",
+})
+
+# Engineering disciplines that are NOT software — a bare "engineer" title in one
+# of these must not fall through to the "software" category. Without this, the
+# corpus's civil/structural/biomedical engineers get tagged tech and inject
+# skills like AutoCAD into an IT student's market demand.
+_NON_SOFTWARE_ENGINEERING = re.compile(
+    r"\b(civil|structural|mechanical|electrical|electronics|biomedical|chemical|"
+    r"hydro(?:power)?|geotech|geotechnical|survey|architect|hardware|"
+    r"field service|service delivery|sales|automobile|automotive|industrial|"
+    r"agricultur|environmental|mining|petroleum)\b",
+    re.I,
+)
+
 # When multiple IT stacks collide, keep the best-evidenced group only.
 _EXCLUSIVE_GROUPS = (
     frozenset({"frontend", "react", "vue", "angular", "design"}),
@@ -261,6 +284,17 @@ def derive_role_aliases(title: str, skills: list[str]) -> list[str]:
 
 def infer_role_category(title: str, skills: list[str]) -> str:
     domains = _detect_domains(title, skills)
+
+    # Title is authoritative for the tech-vs-non-tech decision. A clearly
+    # non-tech title (e.g. "Corporate Sales Executive", "Receptionist") must
+    # not be flipped to a tech category just because its scraped skill list
+    # carries noisy tech tokens like "php"/"html" — a common scraper artifact
+    # on Nepal sales/marketing postings. If the title alone evidences a
+    # non-tech role and NO tech role, ignore skill-derived tech domains.
+    title_domains = _detect_domains(title, [])
+    if (title_domains & _NON_TECH_DOMAINS) and not (title_domains & _TECH_DOMAINS):
+        domains = domains - _TECH_DOMAINS
+
     priority = (
         # IT
         "frontend", "backend", "fullstack", "mobile", "ios", "android", "devops",
@@ -276,11 +310,36 @@ def infer_role_category(title: str, skills: list[str]) -> str:
             if domain in {"php", "python", "nodejs", "fastapi", "django", "flask"}:
                 return "backend"
             return domain
-    if re.search(r"\b(developer|engineer|programmer|software)\b", title, re.I):
+    if re.search(r"\b(developer|programmer)\b", title, re.I):
+        return "software"
+    # Bare "engineer"/"software" only counts as tech when it isn't a non-software
+    # engineering discipline (civil, structural, biomedical, field service, …).
+    if re.search(r"\b(engineer|software)\b", title, re.I) and not _NON_SOFTWARE_ENGINEERING.search(title):
         return "software"
     if re.search(r"\b(mis|support technician|technical business analyst)\b", title, re.I):
         return "tech"
     return "general"
+
+
+def title_is_non_technical(title: str) -> bool:
+    """True when the title alone clearly evidences a non-tech role and no tech
+    role — used as a retrieval-time guard so a mis-tagged posting still can't
+    rank high for a technical query."""
+    title_domains = _detect_domains(title, [])
+    if title_domains & _TECH_DOMAINS:
+        return False
+    if title_domains & _NON_TECH_DOMAINS:
+        return True
+    # Non-software engineering disciplines read as non-technical for IT queries.
+    return bool(_NON_SOFTWARE_ENGINEERING.search(title))
+
+
+def is_technical_role(target_role: str | None) -> bool:
+    """Whether a target_role/query should be treated as a technical (IT) role
+    for retrieval filtering and demand cleaning."""
+    if not target_role:
+        return False
+    return is_technical_query(target_role) and not is_non_technical_query(target_role)
 
 
 def is_technical_query(query: str) -> bool:

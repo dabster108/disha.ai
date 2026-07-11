@@ -7,22 +7,28 @@ import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import InterviewReportCard from "@/components/interview/InterviewReportCard";
 import { getAdminInterview } from "@/lib/adminApi";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 
 export default function AdminInterviewDetailPage({ params }) {
   const { sessionId } = use(params);
-  const [session, setSession] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `admin:interview:${sessionId}`;
+  const initial = readCache(cacheKey);
+  const [session, setSession] = useState(initial.data);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = () => {
-    setLoading(true);
+    if (!session) setLoading(true);
     setError(null);
-    getAdminInterview(sessionId).then(setSession).catch(setError).finally(() => setLoading(false));
+    loadWithCache(cacheKey, () => getAdminInterview(sessionId), CACHE_TTL.adminDetail)
+      .then(setSession)
+      .catch(setError)
+      .finally(() => setLoading(false));
   };
 
   useEffect(load, [sessionId]);
 
-  if (loading) return <LoadingState label="Loading report..." />;
+  if (loading && !session) return <LoadingState label="Loading report..." />;
   if (error) return <ErrorBanner message={error.message} onRetry={load} />;
   if (!session) return null;
 
