@@ -9,6 +9,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import Icon from "@/components/ui/Icon";
 import { useProfile } from "@/context/ProfileContext";
 import { getPracticeHistory, startPractice, suggestPracticeSkills } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 import SessionDurationPicker from "@/components/practice/SessionDurationPicker";
 
 const DIFFICULTIES = ["auto", "easy", "medium", "hard"];
@@ -19,29 +20,33 @@ export default function PracticePage() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  const [suggested, setSuggested] = useState([]);
-  const [track, setTrack] = useState(null);
+  const suggestKey = `practice-suggest:${profileId}`;
+  const historyKey = `practice-history:${profileId}`;
+  const initialSuggest = readCache(suggestKey);
+  const initialHistory = readCache(historyKey);
+
+  const [suggested, setSuggested] = useState(initialSuggest.data?.suggested_skills || []);
+  const [track, setTrack] = useState(initialSuggest.data?.track ?? null);
   const [selected, setSelected] = useState([]);
   const [difficulty, setDifficulty] = useState("auto");
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState(initialHistory.data || []);
   const [durationMinutes, setDurationMinutes] = useState(15);
 
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initialSuggest.data && !initialHistory.data);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState(null);
 
   const load = async () => {
-    setLoading(true);
+    if (!profileId) return;
+    if (!suggested.length && !history.length) setLoading(true);
     setError(null);
     try {
       const [suggestion, pastSessions] = await Promise.all([
-        suggestPracticeSkills(profileId),
-        getPracticeHistory(profileId),
+        loadWithCache(suggestKey, () => suggestPracticeSkills(profileId), CACHE_TTL.practiceSuggest),
+        loadWithCache(historyKey, () => getPracticeHistory(profileId), CACHE_TTL.practice),
       ]);
       setSuggested(suggestion.suggested_skills);
       setTrack(suggestion.track);
-      // A report card / dashboard link can preselect specific skills, e.g.
-      // /practice?skills=React,SQL — falls back to the usual suggestions.
       const preselectParam = searchParams.get("skills");
       const preselect = preselectParam
         ? preselectParam.split(",").map((s) => s.trim()).filter(Boolean).slice(0, MAX_SKILLS)
@@ -82,7 +87,9 @@ export default function PracticePage() {
     }
   };
 
-  if (loading) return <LoadingState label="Finding skills to practice..." />;
+  if (loading && !suggested.length && !history.length) {
+    return <LoadingState label="Finding skills to practice..." />;
+  }
 
   return (
     <div className="mx-auto max-w-5xl px-margin-desktop pb-20 pt-16">

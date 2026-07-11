@@ -2,13 +2,24 @@
 
 import Image from "next/image";
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
+import { useClerk } from "@clerk/nextjs";
 import Icon from "@/components/ui/Icon";
 import { isActivePath, navItems } from "@/lib/navigation";
+import { useProfile } from "@/context/ProfileContext";
 import logo from "@/components/images/logo.png";
 
 export default function Sidebar() {
   const pathname = usePathname();
+  const router = useRouter();
+  const { signOut } = useClerk();
+  const { clearProfile } = useProfile();
+
+  const handleLogout = async () => {
+    clearProfile();
+    await signOut({ redirectUrl: "/" });
+    router.push("/");
+  };
 
   return (
     <aside className="fixed left-0 top-0 z-50 flex h-screen w-64 flex-col border-r border-outline-variant bg-surface px-4 py-6">
@@ -52,12 +63,14 @@ export default function Sidebar() {
           <Icon name="settings" size={20} />
           <span className="text-label-md">Settings</span>
         </Link>
-        <Link
-          href="/mock-interview"
-          className="mt-4 block w-full rounded-xl bg-primary py-3 text-center text-label-md font-medium text-on-primary transition-all hover:bg-primary-container active:scale-95"
+        <button
+          type="button"
+          onClick={handleLogout}
+          className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl border border-outline-variant py-3 text-label-md font-medium text-secondary transition-all hover:border-error hover:bg-error-container hover:text-error"
         >
-          New Simulation
-        </Link>
+          <Icon name="logout" size={18} />
+          Sign out
+        </button>
         <Link
           href="/admin"
           className="mt-2 flex items-center justify-center gap-1.5 py-2 text-xs text-outline transition-colors hover:text-secondary"

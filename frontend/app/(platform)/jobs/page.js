@@ -7,15 +7,20 @@ import LoadingState from "@/components/ui/LoadingState";
 import EmptyState from "@/components/ui/EmptyState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import { useProfile } from "@/context/ProfileContext";
-import { matchJobs, getJobCorpusStatus } from "@/lib/api";
+import { matchJobs, getJobMatches, getJobCorpusStatus } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache, invalidateCache } from "@/lib/resource-cache";
 import JobMatchCard from "@/components/dashboard/JobMatchCard";
 import { saveJob, loadTrackedJobs, isJobSaved, subscribeTrackedJobs } from "@/lib/applicationsStore";
 
 export default function JobsPage() {
   const { profileId, profile } = useProfile();
-  const [data, setData] = useState(null);
+  const cacheKey = `jobs:${profileId}`;
+  const initial = readCache(cacheKey);
+
+  const [data, setData] = useState(initial.data);
   const [corpus, setCorpus] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initial.data);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState(null);
   const [savedIds, setSavedIds] = useState(new Set());
 
@@ -30,13 +35,26 @@ export default function JobsPage() {
 
   const handleSave = (job) => saveJob(job);
 
-  const load = async () => {
+  const load = async ({ force = false } = {}) => {
     if (!profileId) return;
-    setLoading(true);
+    if (!data) setLoading(true);
+    else if (force) setRefreshing(true);
     setError(null);
     try {
+      const fetchJobs = async () => {
+        if (force) {
+          invalidateCache(cacheKey);
+          return matchJobs(profileId);
+        }
+        try {
+          return await getJobMatches(profileId);
+        } catch (err) {
+          if (err?.status === 404) return matchJobs(profileId);
+          throw err;
+        }
+      };
       const [result, status] = await Promise.all([
-        matchJobs(profileId),
+        loadWithCache(cacheKey, fetchJobs, CACHE_TTL.jobs),
         getJobCorpusStatus().catch(() => null),
       ]);
       setData(result);
@@ -45,6 +63,7 @@ export default function JobsPage() {
       setError(err);
     } finally {
       setLoading(false);
+      setRefreshing(false);
     }
   };
 
@@ -53,7 +72,7 @@ export default function JobsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileId]);
 
-  if (loading) return <LoadingState label="Finding relevant job matches..." />;
+  if (loading && !data) return <LoadingState label="Finding relevant job matches..." />;
 
   const jobs = data?.matches || [];
   const strongMatches = jobs.filter((j) => !j.relaxed_match);

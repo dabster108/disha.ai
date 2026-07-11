@@ -16,6 +16,7 @@ import {
   updateRoadmapNodeProgress,
   updateRoadmapProgress,
 } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 import StudyTrackerChip from "@/components/learning/StudyTrackerChip";
 import LessonModule from "@/components/learning/LessonModule";
 import { useResourceStudyTracker } from "@/hooks/useResourceStudyTracker";
@@ -303,10 +304,14 @@ function RoadmapQueueView({ profile, profileId, roadmap, setRoadmap }) {
 
 export default function LearningPage() {
   const { profile, profileId } = useProfile();
-  const [curriculum, setCurriculum] = useState(null);
+  const curriculumKey = `curriculum:${profileId}`;
+  const roadmapKey = `roadmap:${profileId}`;
+  const initialCurriculum = readCache(curriculumKey);
+
+  const [curriculum, setCurriculum] = useState(initialCurriculum.data);
   const [roadmap, setRoadmap] = useState(null);
-  const [mode, setMode] = useState(null); // "curriculum" | "roadmap"
-  const [loading, setLoading] = useState(true);
+  const [mode, setMode] = useState(initialCurriculum.data ? "curriculum" : null);
+  const [loading, setLoading] = useState(!initialCurriculum.data);
   const [generating, setGenerating] = useState(false);
   const [needsGap, setNeedsGap] = useState(false);
   const [error, setError] = useState(null);
@@ -314,8 +319,9 @@ export default function LearningPage() {
   useEffect(() => {
     if (!profileId) return;
     let cancelled = false;
-    setLoading(true);
-    getLatestCurriculum(profileId)
+    const hasCached = Boolean(readCache(curriculumKey).data);
+    if (!hasCached) setLoading(true);
+    loadWithCache(curriculumKey, () => getLatestCurriculum(profileId), CACHE_TTL.curriculum)
       .then((data) => {
         if (cancelled) return;
         setCurriculum(data);
@@ -324,7 +330,6 @@ export default function LearningPage() {
       .catch((err) => {
         if (cancelled) return;
         if (!isNotFound(err)) setError(err);
-        // No curriculum yet — fall back to the roadmap queue while offering generation.
         setMode("roadmap");
       })
       .finally(() => {
@@ -333,12 +338,12 @@ export default function LearningPage() {
     return () => {
       cancelled = true;
     };
-  }, [profileId]);
+  }, [profileId, curriculumKey]);
 
   useEffect(() => {
     if (mode !== "roadmap" || !profileId) return;
     let cancelled = false;
-    getLatestRoadmap(profileId)
+    loadWithCache(roadmapKey, () => getLatestRoadmap(profileId), CACHE_TTL.roadmap)
       .then((data) => {
         if (!cancelled) setRoadmap(data);
       })
@@ -349,7 +354,7 @@ export default function LearningPage() {
     return () => {
       cancelled = true;
     };
-  }, [mode, profileId]);
+  }, [mode, profileId, roadmapKey]);
 
   const handleGenerate = async (force = false) => {
     setGenerating(true);
@@ -365,7 +370,9 @@ export default function LearningPage() {
     }
   };
 
-  if (loading) return <LoadingState label="Loading your learning plan..." />;
+  if (loading && !curriculum && mode !== "roadmap") {
+    return <LoadingState label="Loading your learning plan..." />;
+  }
 
   return (
     <div className="mx-auto max-w-5xl p-6 md:p-12">

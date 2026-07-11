@@ -1,19 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import Icon from "@/components/ui/Icon";
+import GoalSelector from "@/components/layout/GoalSelector";
 import { useProfile } from "@/context/ProfileContext";
 
 export default function TopHeader({ searchPlaceholder = "Search roadmap, lessons..." }) {
-  const router = useRouter();
-  const { profile, clearProfile } = useProfile();
+  const { profile } = useProfile();
   const initial = (profile?.full_name || "?").trim().charAt(0).toUpperCase();
-
-  const handleLogout = () => {
-    clearProfile();
-    router.push("/onboarding");
-  };
 
   return (
     <header className="fixed left-64 right-0 top-0 z-40 flex h-[72px] items-center justify-between border-b border-outline-variant bg-surface/80 px-gutter backdrop-blur-md">
@@ -26,11 +20,7 @@ export default function TopHeader({ searchPlaceholder = "Search roadmap, lessons
         />
       </div>
       <div className="flex items-center gap-6">
-        {profile?.target_role && (
-          <span className="text-label-md font-bold text-primary">
-            Goal: {profile.target_role}
-          </span>
-        )}
+        <GoalSelector />
         <div className="flex items-center gap-3">
           <button
             type="button"
@@ -38,15 +28,6 @@ export default function TopHeader({ searchPlaceholder = "Search roadmap, lessons
             aria-label="Notifications"
           >
             <Icon name="notifications" size={20} />
-          </button>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="flex items-center gap-2 rounded-full border border-outline-variant px-4 py-2 text-label-md text-secondary transition-colors hover:border-error hover:bg-error-container hover:text-error"
-            aria-label="Log out and start fresh"
-          >
-            <Icon name="logout" size={18} />
-            Log out
           </button>
           <Link
             href="/profile"

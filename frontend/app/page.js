@@ -122,7 +122,7 @@ export default function Home() {
             </div>
           </section>
 
-          <section className="bg-surface-container-low py-section-gap">
+          <section id="about" className="bg-surface-container-low py-section-gap">
             <div className="mx-auto max-w-container-max space-y-20 px-margin-mobile text-center md:px-margin-desktop">
               <div className="mx-auto max-w-2xl space-y-6">
                 <span className="text-label-sm uppercase tracking-widest text-primary">
@@ -162,7 +162,7 @@ export default function Home() {
             </div>
           </section>
 
-          <section className="mx-auto max-w-container-max px-margin-mobile py-section-gap md:px-margin-desktop">
+          <section id="how-it-works" className="mx-auto max-w-container-max px-margin-mobile py-section-gap md:px-margin-desktop">
             <div className="mb-24 flex flex-col items-end justify-between gap-8 md:flex-row">
               <div className="max-w-xl space-y-4">
                 <h2 className="text-headline-lg">
@@ -236,7 +236,7 @@ export default function Home() {
             </div>
           </section>
 
-          <section className="mx-auto max-w-container-max px-margin-mobile py-section-gap md:px-margin-desktop">
+          <section id="features" className="mx-auto max-w-container-max px-margin-mobile py-section-gap md:px-margin-desktop">
             <div className="mb-20 space-y-4 text-center">
               <h2 className="text-headline-lg">
                 Precision tools for professional growth

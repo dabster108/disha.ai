@@ -18,6 +18,7 @@ import {
   updateRoadmapNodeProgress,
   updateRoadmapProgress,
 } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 
 const TASK_TYPE_ICON = {
   course: "play_circle",
@@ -45,21 +46,24 @@ function isResourceDone(progress, week, taskIndex, resourceIndex) {
 
 export default function RoadmapPage() {
   const { profile, profileId } = useProfile();
+  const cacheKey = `roadmap:${profileId}`;
+  const initial = readCache(cacheKey);
 
-  const [roadmap, setRoadmap] = useState(null);
+  const [roadmap, setRoadmap] = useState(initial.data);
   const [expanded, setExpanded] = useState({});
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
   const [generating, setGenerating] = useState(false);
   const [needsGap, setNeedsGap] = useState(false);
   const [togglingNodeId, setTogglingNodeId] = useState(null);
 
   const load = async () => {
-    setLoading(true);
+    if (!profileId) return;
+    if (!roadmap) setLoading(true);
     setError(null);
     setNeedsGap(false);
     try {
-      const data = await getLatestRoadmap(profileId);
+      const data = await loadWithCache(cacheKey, () => getLatestRoadmap(profileId), CACHE_TTL.roadmap);
       setRoadmap(data);
       setExpanded({ [data.weeks[0]?.week]: true });
     } catch (err) {
@@ -175,7 +179,7 @@ export default function RoadmapPage() {
     });
   };
 
-  if (loading || generating) {
+  if ((loading && !roadmap) || generating) {
     return <LoadingState label={generating ? "Generating your roadmap..." : "Loading roadmap..."} />;
   }
 

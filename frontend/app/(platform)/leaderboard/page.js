@@ -7,6 +7,7 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 import { useProfile } from "@/context/ProfileContext";
 import { getLeaderboard } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 
 function ActivityPills({ activities }) {
   if (!activities?.length) {
@@ -58,16 +59,23 @@ function CategoryMiniBars({ scores }) {
 
 export default function LeaderboardPage() {
   const { profileId } = useProfile();
-  const [entries, setEntries] = useState([]);
-  const [yourRank, setYourRank] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `leaderboard:${profileId}`;
+  const initial = readCache(cacheKey);
+  const [entries, setEntries] = useState(initial.data?.entries || []);
+  const [yourRank, setYourRank] = useState(initial.data?.your_rank ?? null);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
-    setLoading(true);
+    if (!profileId) return;
+    if (!entries.length && yourRank == null) setLoading(true);
     setError(null);
     try {
-      const res = await getLeaderboard(profileId);
+      const res = await loadWithCache(
+        cacheKey,
+        () => getLeaderboard(profileId),
+        CACHE_TTL.leaderboard
+      );
       setEntries(res.entries || []);
       setYourRank(res.your_rank);
     } catch (err) {
@@ -75,13 +83,15 @@ export default function LeaderboardPage() {
     } finally {
       setLoading(false);
     }
-  }, [profileId]);
+  }, [profileId, cacheKey]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  if (loading) return <LoadingState label="Loading leaderboard..." />;
+  if (loading && entries.length === 0 && yourRank == null) {
+    return <LoadingState label="Loading leaderboard..." />;
+  }
 
   return (
     <div className="mx-auto max-w-5xl px-margin-desktop pb-20 pt-16">

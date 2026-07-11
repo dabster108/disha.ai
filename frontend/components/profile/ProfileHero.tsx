@@ -92,8 +92,6 @@ export function ProfileHero({ profile, onEdit }: ProfileHeroProps) {
 
         <div className="flex flex-wrap gap-2">
           <Badge variant="default">Career Goal: {profile.careerGoal.dreamJob}</Badge>
-          <Badge variant="success">Job Readiness {profile.aiSummary.jobReadiness}%</Badge>
-          <Badge variant="secondary">Roadmap {profile.aiSummary.roadmapProgress}%</Badge>
         </div>
       </div>
     </motion.div>

@@ -1,6 +1,15 @@
+"use client";
+
 import Image from "next/image";
 import Link from "next/link";
+import GetStartedButton from "@/components/layout/GetStartedButton";
 import logo from "@/components/images/logo.png";
+
+const NAV_LINKS = [
+  { href: "#how-it-works", label: "How it works" },
+  { href: "#features", label: "Features" },
+  { href: "#about", label: "About" },
+];
 
 export default function MarketingHeader() {
   return (
@@ -14,37 +23,21 @@ export default function MarketingHeader() {
           DISHA AI
         </Link>
         <div className="hidden items-center gap-10 md:flex">
-          <Link
-            href="/"
-            className="border-b-2 border-primary text-label-md font-bold text-primary"
-          >
-            Discover
-          </Link>
-          <Link
-            href="/roadmap"
-            className="text-label-md text-on-surface-variant transition-all duration-200 hover:text-primary"
-          >
-            Learn
-          </Link>
-          <Link
-            href="/journey"
-            className="text-label-md text-on-surface-variant transition-all duration-200 hover:text-primary"
-          >
-            Career Path
-          </Link>
-          <Link
-            href="#about"
-            className="text-label-md text-on-surface-variant transition-all duration-200 hover:text-primary"
-          >
-            About
-          </Link>
+          {NAV_LINKS.map((item) => (
+            <a
+              key={item.href}
+              href={item.href}
+              className="text-label-md text-on-surface-variant transition-all duration-200 hover:text-primary"
+            >
+              {item.label}
+            </a>
+          ))}
         </div>
-        <Link
-          href="/dashboard"
+        <GetStartedButton
           className="rounded-full bg-primary-container px-6 py-2.5 text-label-md text-on-primary shadow-sm transition-all hover:scale-[1.02] active:scale-95"
-        >
-          Get Started
-        </Link>
+          startLabel="Get Started"
+          returningLabel="Dashboard"
+        />
       </nav>
     </header>
   );

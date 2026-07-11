@@ -4,12 +4,13 @@ import uuid
 from datetime import datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 from pydantic import BaseModel, ConfigDict, Field
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.deps import get_db
-from app.db.models import StudentProfile
+from app.db.models import StudentProfile, User
 from app.services.cv_parser import EducationEntry, ExperienceEntry, extract_text, parse_cv
 
 router = APIRouter(prefix="/api/profile", tags=["profile"])
@@ -18,6 +19,7 @@ MAX_RESUME_BYTES = 5 * 1024 * 1024
 
 
 class ProfileCreate(BaseModel):
+    clerk_user_id: str | None = Field(None, min_length=1, max_length=255)
     full_name: str | None = None
     email: str | None = None
     phone: str | None = None
@@ -87,15 +89,177 @@ class ResumeParseResult(BaseModel):
     note: str = "Review these fields, then save them via POST /api/profile."
 
 
+async def _get_or_create_user(
+    db: AsyncSession,
+    *,
+    clerk_user_id: str,
+    email: str | None,
+    full_name: str | None,
+) -> User:
+    result = await db.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+    user = result.scalar_one_or_none()
+    if user is not None:
+        if full_name and not user.full_name:
+            user.full_name = full_name
+        if email and user.email.endswith("@users.clerk.invalid"):
+            user.email = email
+        return user
+
+    if email:
+        result = await db.execute(select(User).where(func.lower(User.email) == email.strip().lower()))
+        user = result.scalar_one_or_none()
+        if user is not None:
+            if user.clerk_user_id and user.clerk_user_id != clerk_user_id:
+                raise HTTPException(
+                    status_code=409,
+                    detail="This email is already linked to a different account.",
+                )
+            user.clerk_user_id = clerk_user_id
+            if full_name and not user.full_name:
+                user.full_name = full_name
+            return user
+
+    resolved_email = email or f"{clerk_user_id}@users.clerk.invalid"
+    user = User(clerk_user_id=clerk_user_id, email=resolved_email, full_name=full_name)
+    db.add(user)
+    await db.flush()
+    return user
+
+
+async def _latest_profile_for_user(db: AsyncSession, user_id: uuid.UUID) -> StudentProfile | None:
+    result = await db.execute(
+        select(StudentProfile)
+        .where(StudentProfile.user_id == user_id)
+        .order_by(StudentProfile.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
+async def _profile_for_clerk_user(
+    db: AsyncSession,
+    clerk_user_id: str,
+    *,
+    email: str | None = None,
+) -> StudentProfile | None:
+    """Resolve the student's profile for a Clerk account, linking legacy rows by email when needed."""
+    email_norm = email.strip().lower() if email and email.strip() else None
+
+    result = await db.execute(select(User).where(User.clerk_user_id == clerk_user_id))
+    user = result.scalar_one_or_none()
+    if user is not None:
+        profile = await _latest_profile_for_user(db, user.id)
+        if profile is not None:
+            return profile
+
+    # Profile exists for this email but Clerk/user link was never saved (common after first onboarding).
+    if email_norm:
+        result = await db.execute(
+            select(StudentProfile)
+            .where(func.lower(StudentProfile.email) == email_norm)
+            .order_by(StudentProfile.created_at.desc())
+            .limit(1)
+        )
+        profile = result.scalar_one_or_none()
+        if profile is not None:
+            try:
+                linked_user = await _get_or_create_user(
+                    db,
+                    clerk_user_id=clerk_user_id,
+                    email=email,
+                    full_name=profile.full_name,
+                )
+            except HTTPException:
+                return None
+            if profile.user_id != linked_user.id:
+                profile.user_id = linked_user.id
+            await db.commit()
+            await db.refresh(profile)
+            return profile
+
+        # User row exists for email (no profile on that user yet) — attach Clerk id.
+        result = await db.execute(select(User).where(func.lower(User.email) == email_norm))
+        user_by_email = result.scalar_one_or_none()
+        if user_by_email is not None:
+            if user_by_email.clerk_user_id and user_by_email.clerk_user_id != clerk_user_id:
+                return None
+            user_by_email.clerk_user_id = clerk_user_id
+            await db.flush()
+            profile = await _latest_profile_for_user(db, user_by_email.id)
+            if profile is not None:
+                await db.commit()
+                await db.refresh(profile)
+                return profile
+
+    # Legacy orphan profile (no user_id) matched by exact email from query param.
+    if email and email.strip():
+        result = await db.execute(
+            select(StudentProfile)
+            .where(
+                func.lower(StudentProfile.email) == email.strip().lower(),
+                StudentProfile.user_id.is_(None),
+            )
+            .order_by(StudentProfile.created_at.desc())
+            .limit(1)
+        )
+        orphan = result.scalar_one_or_none()
+        if orphan is not None:
+            try:
+                linked_user = await _get_or_create_user(
+                    db,
+                    clerk_user_id=clerk_user_id,
+                    email=email,
+                    full_name=orphan.full_name,
+                )
+            except HTTPException:
+                return None
+            orphan.user_id = linked_user.id
+            await db.commit()
+            await db.refresh(orphan)
+            return orphan
+
+    return None
+
+
 @router.post("", response_model=ProfileOut, status_code=201)
 async def create_profile(payload: ProfileCreate, db: AsyncSession = Depends(get_db)) -> StudentProfile:
-    data = payload.model_dump()
+    data = payload.model_dump(exclude={"clerk_user_id"})
     data["education"] = [entry.model_dump() for entry in payload.education]
     data["experience"] = [entry.model_dump() for entry in payload.experience]
+
+    if payload.clerk_user_id:
+        existing = await _profile_for_clerk_user(
+            db, payload.clerk_user_id, email=payload.email
+        )
+        if existing is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="A profile already exists for this account. Use GET /api/profile/by-clerk/{clerk_user_id}.",
+            )
+        user = await _get_or_create_user(
+            db,
+            clerk_user_id=payload.clerk_user_id,
+            email=payload.email,
+            full_name=payload.full_name,
+        )
+        data["user_id"] = user.id
+
     profile = StudentProfile(**data)
     db.add(profile)
     await db.commit()
     await db.refresh(profile)
+    return profile
+
+
+@router.get("/by-clerk/{clerk_user_id}", response_model=ProfileOut)
+async def get_profile_by_clerk(
+    clerk_user_id: str,
+    email: str | None = Query(None),
+    db: AsyncSession = Depends(get_db),
+) -> StudentProfile:
+    profile = await _profile_for_clerk_user(db, clerk_user_id, email=email)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="No profile linked to this account yet")
     return profile
 
 

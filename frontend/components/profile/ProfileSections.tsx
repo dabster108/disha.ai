@@ -3,6 +3,9 @@
 import { useState } from "react";
 import { Plus, Trash2, Star, ExternalLink } from "lucide-react";
 import { ProfileSection, FieldGrid, Field, ReadOnlyValue } from "@/components/profile/ProfileSection";
+import CatalogSkillInput from "@/components/ui/CatalogSkillInput";
+import CareerRoleInput from "@/components/ui/CareerRoleInput";
+import { inferSkillCategory } from "@/lib/skills-catalog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
@@ -280,7 +283,7 @@ function CrudExperience({ data, onChange }: SectionProps) {
 
 export function CareerGoalSection({ data, onChange }: SectionProps) {
   const { editing, draft, setDraft, start, cancel, save } = useEditSection(data.careerGoal, (careerGoal) =>
-    onChange({ ...data, careerGoal })
+    onChange({ ...data, careerGoal, currentRole: careerGoal.dreamJob })
   );
 
   return (
@@ -296,9 +299,16 @@ export function CareerGoalSection({ data, onChange }: SectionProps) {
       <FieldGrid>
         <Field label="Dream Job">
           {editing ? (
-            <Input value={draft.dreamJob} onChange={(e) => setDraft({ ...draft, dreamJob: e.target.value })} />
+            <CareerRoleInput
+              inline
+              onSelect={(role) => setDraft({ ...draft, dreamJob: role })}
+              placeholder="Search roles (e.g. Backend Developer)"
+            />
           ) : (
             <ReadOnlyValue value={data.careerGoal.dreamJob} />
+          )}
+          {editing && draft.dreamJob && (
+            <p className="mt-2 text-sm text-primary">Selected: {draft.dreamJob}</p>
           )}
         </Field>
         <Field label="Preferred Industry">
@@ -363,61 +373,72 @@ export function CareerGoalSection({ data, onChange }: SectionProps) {
 }
 
 export function SkillsSection({ data, onChange }: SectionProps) {
-  const grouped = data.skills.reduce<Record<string, SkillEntry[]>>((acc, s) => {
-    (acc[s.category] ||= []).push(s);
-    return acc;
-  }, {});
+  const [adding, setAdding] = useState(false);
 
-  const addSkill = () => {
+  const remove = (id: string) => onChange({ ...data, skills: data.skills.filter((s) => s.id !== id) });
+
+  const addSkill = (name: string) => {
     onChange({
       ...data,
       skills: [
         ...data.skills,
         {
           id: `skill-${Date.now()}`,
-          name: "New Skill",
-          category: "Frameworks",
+          name,
+          category: inferSkillCategory(name),
           level: "Intermediate",
           yearsOfExperience: 1,
         },
       ],
     });
+    setAdding(false);
   };
-  const remove = (id: string) => onChange({ ...data, skills: data.skills.filter((s) => s.id !== id) });
 
   return (
     <ProfileSection
       id="skills"
       title="Skills"
-      description="Categorized skills with proficiency levels."
+      description="Your skills from our catalog."
       action={
-        <Button variant="secondary" size="sm" onClick={addSkill}>
-          <Plus className="h-4 w-4" />
-          Add Skill
-        </Button>
+        !adding ? (
+          <Button variant="secondary" size="sm" onClick={() => setAdding(true)}>
+            <Plus className="h-4 w-4" />
+            Add Skill
+          </Button>
+        ) : null
       }
     >
-      <div className="space-y-6">
-        {Object.entries(grouped).map(([category, skills]) => (
-          <div key={category}>
-            <p className="mb-3 text-label-sm font-semibold uppercase tracking-wider text-secondary">{category}</p>
-            <div className="flex flex-wrap gap-2">
-              {skills.map((skill) => (
-                <div
-                  key={skill.id}
-                  className="flex items-center gap-2 rounded-xl border border-outline-variant bg-surface-container-low px-3 py-2"
+      <div className="space-y-4">
+        {data.skills.length > 0 ? (
+          <div className="flex flex-wrap gap-2">
+            {data.skills.map((skill) => (
+              <div
+                key={skill.id}
+                className="flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container-low px-3 py-1.5"
+              >
+                <span className="text-label-md font-medium text-on-surface">{skill.name}</span>
+                <button
+                  type="button"
+                  onClick={() => remove(skill.id)}
+                  className="text-secondary hover:text-error"
+                  aria-label={`Remove ${skill.name}`}
                 >
-                  <span className="text-label-md font-medium text-on-surface">{skill.name}</span>
-                  <Badge variant="secondary">{skill.level}</Badge>
-                  <span className="text-xs text-secondary">{skill.yearsOfExperience}y</span>
-                  <button type="button" onClick={() => remove(skill.id)} className="text-secondary hover:text-error">
-                    <Trash2 className="h-3.5 w-3.5" />
-                  </button>
-                </div>
-              ))}
-            </div>
+                  <Trash2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            ))}
           </div>
-        ))}
+        ) : (
+          !adding && <p className="text-body-md text-secondary">No skills yet. Click Add Skill to get started.</p>
+        )}
+
+        {adding && (
+          <CatalogSkillInput
+            exclude={data.skills.map((s) => s.name)}
+            onAdd={addSkill}
+            onCancel={() => setAdding(false)}
+          />
+        )}
       </div>
     </ProfileSection>
   );
@@ -587,10 +608,36 @@ export function CertificationsSection({ data, onChange }: SectionProps) {
   );
 }
 
-export function PortfolioSection({ data, onChange }: SectionProps) {
+export function PortfolioSection({
+  data,
+  onChange,
+  skillsSource,
+  onResumeUpload,
+}: SectionProps & {
+  skillsSource?: string;
+  onResumeUpload?: (file: File) => Promise<void>;
+}) {
   const { editing, draft, setDraft, start, cancel, save } = useEditSection(data.portfolio, (portfolio) =>
     onChange({ ...data, portfolio })
   );
+  const [uploading, setUploading] = useState(false);
+  const [uploadError, setUploadError] = useState<string | null>(null);
+
+  const hasResume = Boolean(data.portfolio.resumeFileName) || skillsSource === "cv";
+
+  const handleFile = async (file: File | null) => {
+    if (!file || !onResumeUpload) return;
+    setUploading(true);
+    setUploadError(null);
+    try {
+      await onResumeUpload(file);
+    } catch {
+      setUploadError("Could not process resume. Try a PDF or DOCX file.");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const links: { key: keyof PortfolioLinks; label: string }[] = [
     { key: "portfolioUrl", label: "Portfolio URL" },
     { key: "github", label: "GitHub" },
@@ -613,14 +660,43 @@ export function PortfolioSection({ data, onChange }: SectionProps) {
       onSave={save}
       onCancel={cancel}
     >
-      <div className="mb-6 rounded-xl border border-dashed border-outline-variant p-6 text-center">
-        <p className="text-body-md text-secondary">Drop your resume here or click to upload</p>
-        <Button variant="secondary" size="sm" className="mt-3">
-          Upload Resume
-        </Button>
-        {data.portfolio.resumeFileName && (
-          <p className="mt-2 text-sm text-primary">{data.portfolio.resumeFileName}</p>
+      <div className="mb-6 rounded-xl border border-dashed border-outline-variant p-6">
+        {hasResume ? (
+          <div className="flex flex-col items-center gap-3 text-center sm:flex-row sm:text-left">
+            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+              </svg>
+            </div>
+            <div className="flex-1">
+              <p className="font-medium text-on-surface">
+                {data.portfolio.resumeFileName || "Resume on file"}
+              </p>
+              <p className="text-sm text-secondary">
+                Uploaded from your CV{skillsSource === "cv" ? " during onboarding" : ""}. Re-upload to refresh skills and profile.
+              </p>
+            </div>
+          </div>
+        ) : (
+          <p className="text-center text-body-md text-secondary">Drop your resume here or click to upload</p>
         )}
+        <div className="mt-4 flex justify-center">
+          <label
+            className={`inline-flex cursor-pointer items-center rounded-xl border border-outline-variant bg-surface-container-low px-4 py-2 text-label-md font-medium text-on-surface transition-colors hover:bg-surface-container-high ${
+              uploading || !onResumeUpload ? "pointer-events-none opacity-60" : ""
+            }`}
+          >
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              className="hidden"
+              disabled={uploading || !onResumeUpload}
+              onChange={(e) => handleFile(e.target.files?.[0] || null)}
+            />
+            {uploading ? "Processing..." : hasResume ? "Re-upload Resume" : "Upload Resume"}
+          </label>
+        </div>
+        {uploadError && <p className="mt-2 text-center text-sm text-error">{uploadError}</p>}
       </div>
       <FieldGrid>
         {links.map(({ key, label }) => (

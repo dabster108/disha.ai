@@ -170,14 +170,15 @@ export function loadExtendedProfile(profileId: string | null, api?: ApiProfile |
 }
 
 function extendedToApiPayload(data: StudentProfileExtended) {
+  const dreamJob = data.careerGoal.dreamJob || data.currentRole;
   return {
     full_name: data.personal.fullName || null,
     email: data.personal.email || null,
     phone: data.personal.phone || null,
-    target_role: data.careerGoal.dreamJob || data.currentRole,
+    target_role: dreamJob,
     location: data.personal.city || null,
     summary: data.careerGoal.careerObjective || null,
-    skills: data.skills.map((s) => s.name),
+    skills: data.skills.map((s) => s.name).filter(Boolean),
     education: data.education.map((e) => ({
       institution: e.institution,
       degree: e.degree,
@@ -199,7 +200,13 @@ function extendedToApiPayload(data: StudentProfileExtended) {
       technologies: e.technologies,
       achievements: e.achievements,
     })),
-    profile_meta: data,
+    profile_meta: {
+      ...data,
+      careerPreferences: {
+        ...data.careerPreferences,
+        preferredRoles: [...new Set([dreamJob, ...data.careerPreferences.preferredRoles])].filter(Boolean),
+      },
+    },
   };
 }
 

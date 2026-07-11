@@ -9,6 +9,7 @@ import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
 import { useProfile } from "@/context/ProfileContext";
 import { createRoadmap, getLatestGap, isNotFound, runSkillGap } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache, invalidateCache } from "@/lib/resource-cache";
 
 const CONFIDENCE_STYLE = {
   high: { cls: "bg-green-100 text-green-700", label: "High" },
@@ -290,19 +291,22 @@ function RoleFitPanel({ roleFit }) {
 export default function SkillGapPage() {
   const { profile, profileId } = useProfile();
   const router = useRouter();
+  const cacheKey = `gap:${profileId}`;
 
-  const [snapshot, setSnapshot] = useState(null);
-  const [loading, setLoading] = useState(true);
+  const initial = readCache(cacheKey);
+  const [snapshot, setSnapshot] = useState(initial.data);
+  const [loading, setLoading] = useState(!initial.data);
   const [running, setRunning] = useState(false);
   const [generatingRoadmap, setGeneratingRoadmap] = useState(false);
   const [generatingNarrative, setGeneratingNarrative] = useState(false);
   const [error, setError] = useState(null);
 
   const load = async () => {
-    setLoading(true);
+    if (!profileId) return;
+    if (!snapshot) setLoading(true);
     setError(null);
     try {
-      const data = await getLatestGap(profileId);
+      const data = await loadWithCache(cacheKey, () => getLatestGap(profileId), CACHE_TTL.gap);
       setSnapshot(data);
     } catch (err) {
       if (isNotFound(err)) {
@@ -328,6 +332,7 @@ export default function SkillGapPage() {
       // score, and priority list — all deterministic — show up immediately.
       // The AI summary is fetched separately, on demand, below.
       const data = await runSkillGap(profileId, { include_narrative: false });
+      invalidateCache(`gap:${profileId}`);
       setSnapshot(data);
     } catch (err) {
       setError(err);
@@ -345,6 +350,7 @@ export default function SkillGapPage() {
         interview_session_id: snapshot.interview_session_id,
         practice_session_id: snapshot.practice_session_id,
       });
+      invalidateCache(`gap:${profileId}`);
       setSnapshot(data);
     } catch (err) {
       setError(err);
@@ -365,7 +371,7 @@ export default function SkillGapPage() {
     }
   };
 
-  if (loading) return <LoadingState label="Loading your skill gap..." />;
+  if (loading && !snapshot) return <LoadingState label="Loading your skill gap..." />;
 
   if (error) {
     return (

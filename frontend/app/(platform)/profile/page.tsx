@@ -2,8 +2,8 @@
 
 import { useEffect, useState, useCallback } from "react";
 import { useProfile as useProfileContext } from "@/context/ProfileContext";
-import { getLatestGap, getLatestRoadmap, getInterviewHistory, getPracticeHistory } from "@/lib/api";
-import { mergeExtendedProfile, saveExtendedProfile } from "@/lib/profile-store";
+import { getInterviewHistory, getPracticeHistory, uploadResume, updateProfile } from "@/lib/api";
+import { mergeExtendedProfile, saveExtendedProfile, flushExtendedProfile } from "@/lib/profile-store";
 import type { StudentProfileExtended, ApiProfile } from "@/types/profile";
 import LoadingState from "@/components/ui/LoadingState";
 import { ProfileHero } from "@/components/profile/ProfileHero";
@@ -17,19 +17,49 @@ import {
   CertificationsSection,
   PortfolioSection,
   CareerPreferencesSection,
-  AiSummarySection,
   ActivitySection,
   PrivacySection,
 } from "@/components/profile/ProfileSections";
+import { matchCareerRole } from "@/lib/careerRoles";
+
+function mapParsedSkills(raw?: string[]) {
+  if (!raw?.length) return [];
+  const categories: Record<string, import("@/types/profile").SkillCategory> = {
+    python: "Programming Languages",
+    javascript: "Programming Languages",
+    typescript: "Programming Languages",
+    fastapi: "Frameworks",
+    react: "Frameworks",
+    nextjs: "Frameworks",
+    postgresql: "Databases",
+    mongodb: "Databases",
+    docker: "DevOps",
+    aws: "Cloud",
+    tensorflow: "AI",
+    communication: "Soft Skills",
+  };
+  return raw.map((name, i) => {
+    const key = name.toLowerCase().replace(/\s+/g, "");
+    return {
+      id: `skill-${Date.now()}-${i}`,
+      name,
+      category: categories[key] || "Frameworks",
+      level: "Intermediate" as const,
+      yearsOfExperience: 1,
+    };
+  });
+}
 
 export default function ProfilePage() {
   const { profile, profileId, loading } = useProfileContext();
   const [extended, setExtended] = useState<StudentProfileExtended | null>(null);
   const [ready, setReady] = useState(false);
+  const [skillsSource, setSkillsSource] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     if (!profileId) return;
     setExtended(mergeExtendedProfile(profile as ApiProfile | null));
+    setSkillsSource((profile as ApiProfile & { skills_source?: string })?.skills_source);
     setReady(true);
   }, [profileId, profile]);
 
@@ -38,9 +68,7 @@ export default function ProfilePage() {
 
     async function enrich() {
       try {
-        const [gapRes, roadmapRes, interviews, practices] = await Promise.allSettled([
-          getLatestGap(profileId!),
-          getLatestRoadmap(profileId!),
+        const [interviews, practices] = await Promise.allSettled([
           getInterviewHistory(profileId!),
           getPracticeHistory(profileId!),
         ]);
@@ -48,21 +76,6 @@ export default function ProfilePage() {
         setExtended((prev) => {
           if (!prev) return prev;
           const next = { ...prev };
-          if (gapRes.status === "fulfilled") {
-            const gd = gapRes.value.gap_data;
-            next.aiSummary = {
-              ...next.aiSummary,
-              jobReadiness: gd.readiness_score ?? next.aiSummary.jobReadiness,
-              topStrengths: gd.matched_skills?.slice(0, 3).map((s: { skill: string }) => s.skill) ?? next.aiSummary.topStrengths,
-              skillsToImprove: gd.priority_learn?.slice(0, 3).map((p: { skill: string }) => p.skill) ?? next.aiSummary.skillsToImprove,
-            };
-          }
-          if (roadmapRes.status === "fulfilled") {
-            const rm = roadmapRes.value;
-            const total = rm.weeks?.reduce((n: number, w: { tasks: unknown[] }) => n + w.tasks.length, 0) ?? 0;
-            const done = rm.progress?.completed?.length ?? 0;
-            next.aiSummary.roadmapProgress = total > 0 ? Math.round((done / total) * 100) : 0;
-          }
           const completedInterviews = interviews.status === "fulfilled"
             ? interviews.value.filter((s: { status: string }) => s.status === "completed").length
             : 0;
@@ -75,11 +88,13 @@ export default function ProfilePage() {
             projectsCompleted: next.projects.length,
             certificates: next.certifications.length,
           };
-          if (completedPractice > 0) next.activity.learningHours = Math.max(next.activity.learningHours, completedPractice * 2);
+          if (completedPractice > 0) {
+            next.activity.learningHours = Math.max(next.activity.learningHours, completedPractice * 2);
+          }
           return next;
         });
       } catch {
-        /* keep mock defaults */
+        /* keep defaults */
       }
     }
     enrich();
@@ -93,9 +108,76 @@ export default function ProfilePage() {
     [profileId]
   );
 
+  const handleResumeUpload = useCallback(
+    async (file: File) => {
+      if (!profileId || !extended) return;
+      const parsed = await uploadResume(file);
+      const dreamJob = matchCareerRole(parsed.suggested_target_role) || extended.careerGoal.dreamJob;
+      const next: StudentProfileExtended = {
+        ...extended,
+        personal: {
+          ...extended.personal,
+          fullName: parsed.full_name || extended.personal.fullName,
+          email: parsed.email || extended.personal.email,
+          phone: parsed.phone || extended.personal.phone,
+        },
+        careerGoal: {
+          ...extended.careerGoal,
+          dreamJob,
+          careerObjective: parsed.summary || extended.careerGoal.careerObjective,
+        },
+        currentRole: dreamJob,
+        skills: parsed.skills?.length ? mapParsedSkills(parsed.skills) : extended.skills,
+        education: parsed.education?.length
+          ? parsed.education.map((e: Record<string, string>, i: number) => ({
+              id: `edu-${Date.now()}-${i}`,
+              institution: e.institution || "",
+              degree: e.degree || "",
+              faculty: "",
+              major: e.field || "",
+              startDate: e.start_year || "",
+              endDate: e.end_year || e.year || "",
+              currentSemester: "",
+              cgpa: e.gpa || "",
+              description: "",
+            }))
+          : extended.education,
+        experience: parsed.experience?.length
+          ? parsed.experience.map((e: Record<string, string>, i: number) => ({
+              id: `exp-${Date.now()}-${i}`,
+              company: e.company || "",
+              position: e.title || "",
+              employmentType: "Full-time",
+              location: "",
+              startDate: e.start_date || "",
+              endDate: e.end_date || "",
+              description: e.description || "",
+              technologies: [],
+              achievements: [],
+            }))
+          : extended.experience,
+        portfolio: {
+          ...extended.portfolio,
+          resumeFileName: file.name,
+        },
+        careerPreferences: {
+          ...extended.careerPreferences,
+          preferredRoles: [...new Set([dreamJob, ...extended.careerPreferences.preferredRoles])],
+        },
+      };
+      setExtended(next);
+      await flushExtendedProfile(profileId, next);
+      await updateProfile(profileId, { skills_source: "cv" });
+      setSkillsSource("cv");
+    },
+    [profileId, extended]
+  );
+
   if (loading || !ready || !extended) {
     return <LoadingState label="Loading your profile..." />;
   }
+
+  const apiProfile = profile as ApiProfile & { skills_source?: string };
 
   return (
     <div className="mx-auto max-w-5xl space-y-8 p-8 md:p-12">
@@ -107,9 +189,13 @@ export default function ProfilePage() {
       <SkillsSection data={extended} onChange={persist} />
       <ProjectsSection data={extended} onChange={persist} />
       <CertificationsSection data={extended} onChange={persist} />
-      <PortfolioSection data={extended} onChange={persist} />
+      <PortfolioSection
+        data={extended}
+        onChange={persist}
+        skillsSource={skillsSource || apiProfile?.skills_source}
+        onResumeUpload={handleResumeUpload}
+      />
       <CareerPreferencesSection data={extended} onChange={persist} />
-      <AiSummarySection data={extended} />
       <ActivitySection data={extended} />
       <PrivacySection data={extended} onChange={persist} />
     </div>

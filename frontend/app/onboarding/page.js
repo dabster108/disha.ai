@@ -1,19 +1,20 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { useAuth, useUser } from "@clerk/nextjs";
 import Icon from "@/components/ui/Icon";
 import ErrorBanner from "@/components/ui/ErrorBanner";
+import LoadingState from "@/components/ui/LoadingState";
 import EducationEditor from "@/components/onboarding/EducationEditor";
 import ExperienceEditor from "@/components/onboarding/ExperienceEditor";
 import RoleSelect from "@/components/onboarding/RoleSelect";
 import SkillMultiSelect from "@/components/onboarding/SkillMultiSelect";
 import { useProfile } from "@/context/ProfileContext";
-import { createProfile, uploadResume } from "@/lib/api";
+import { createProfile, getProfileByClerk, uploadResume } from "@/lib/api";
 import { matchCareerRole } from "@/lib/careerRoles";
 import {
-  DEMO_PROFILE,
   EMPTY_EDUCATION,
   EMPTY_EXPERIENCE,
 } from "@/lib/demoProfile";
@@ -64,7 +65,6 @@ function applyParsedToForm(parsed) {
 
   return {
     full_name: parsed.full_name || "",
-    email: parsed.email || "",
     phone: parsed.phone || "",
     summary: parsed.summary || "",
     skills: parsed.skills || [],
@@ -102,7 +102,9 @@ function cleanExperience(entries) {
 
 export default function OnboardingPage() {
   const router = useRouter();
-  const { setProfile } = useProfile();
+  const { isLoaded, isSignedIn } = useAuth();
+  const { user } = useUser();
+  const { setProfile, profileId, profile, profileReady, loading } = useProfile();
 
   const [step, setStep] = useState(1);
   const [uploading, setUploading] = useState(false);
@@ -116,29 +118,33 @@ export default function OnboardingPage() {
 
   const updateForm = (patch) => setForm((prev) => ({ ...prev, ...patch }));
 
-  const loadDemo = () => {
-    setError(null);
-    setWarnings(["Demo profile loaded — review fields, then continue to dashboard."]);
-    setSkillsSource("manual");
-    setExtractionMethod("demo");
+  useEffect(() => {
+    if (!isLoaded) return;
+    if (!isSignedIn) {
+      router.replace("/sign-in");
+    }
+  }, [isLoaded, isSignedIn, router]);
+
+  useEffect(() => {
+    if (!profileReady || loading) return;
+    if (profileId && profile) {
+      router.replace("/dashboard");
+    }
+  }, [profileReady, loading, profileId, profile, router]);
+
+  useEffect(() => {
+    if (!user) return;
+    const email =
+      user.primaryEmailAddress?.emailAddress ||
+      user.emailAddresses?.[0]?.emailAddress ||
+      "";
+    const name = user.fullName || [user.firstName, user.lastName].filter(Boolean).join(" ");
     updateForm({
-      full_name: DEMO_PROFILE.full_name,
-      email: DEMO_PROFILE.email,
-      phone: DEMO_PROFILE.phone,
-      summary: DEMO_PROFILE.summary,
-      skills: [...DEMO_PROFILE.skills],
-      parsedSkills: [...DEMO_PROFILE.skills],
-      education: DEMO_PROFILE.education.map((e) => ({ ...e })),
-      experience: DEMO_PROFILE.experience.map((e) => ({ ...e })),
-      target_role: DEMO_PROFILE.target_role,
-      suggested_target_role: DEMO_PROFILE.suggested_target_role,
-      location: DEMO_PROFILE.location,
-      years_of_experience: String(DEMO_PROFILE.years_of_experience),
-      time_per_week: String(DEMO_PROFILE.time_per_week),
-      budget: DEMO_PROFILE.budget,
+      full_name: name || "",
+      email: email || "",
     });
-    setStep(2);
-  };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
 
   const handleUpload = async (file) => {
     setUploading(true);
@@ -146,7 +152,7 @@ export default function OnboardingPage() {
     setWarnings([]);
     try {
       const parsed = await uploadResume(file);
-      updateForm(applyParsedToForm(parsed));
+      setForm((prev) => ({ ...prev, ...applyParsedToForm(parsed) }));
       setSkillsSource("cv");
       setExtractionMethod(parsed.extraction);
       setWarnings(parsed.parse_warnings || []);
@@ -176,9 +182,21 @@ export default function OnboardingPage() {
 
     setSubmitting(true);
     try {
+      if (!user?.id) {
+        setError(new Error("Your sign-in is still loading. Please wait a moment and try again."));
+        setSubmitting(false);
+        return;
+      }
+
+      const clerkEmail =
+        user.primaryEmailAddress?.emailAddress ||
+        user.emailAddresses?.[0]?.emailAddress ||
+        "";
+
       const payload = {
+        clerk_user_id: user.id,
         full_name: form.full_name.trim() || null,
-        email: form.email.trim() || null,
+        email: clerkEmail || form.email.trim() || null,
         phone: form.phone.trim() || null,
         summary: form.summary.trim() || null,
         skills: form.skills,
@@ -192,15 +210,35 @@ export default function OnboardingPage() {
         education: cleanEducation(form.education),
         experience: cleanExperience(form.experience),
       };
-      const created = await createProfile(payload);
+
+      let created;
+      try {
+        created = await createProfile(payload);
+      } catch (err) {
+        if (err?.status === 409) {
+          const existing = await getProfileByClerk(user.id, clerkEmail || undefined);
+          setProfile(existing);
+          router.replace("/dashboard");
+          return;
+        }
+        throw err;
+      }
       setProfile(created);
-      router.push("/dashboard");
+      router.replace("/dashboard");
     } catch (err) {
       setError(err);
     } finally {
       setSubmitting(false);
     }
   };
+
+  if (!isLoaded || !isSignedIn || !user?.id) {
+    return <LoadingState label="Loading your account..." />;
+  }
+
+  if (!profileReady || loading || (profileId && profile)) {
+    return <LoadingState label="Checking your profile..." />;
+  }
 
   return (
     <div className="mx-auto flex min-h-screen max-w-2xl flex-col justify-center px-5 py-12">
@@ -209,7 +247,7 @@ export default function OnboardingPage() {
           <h1 className="text-lg font-bold text-primary">DISHA AI</h1>
         </Link>
         <p className="mt-1 text-body-md text-secondary">
-          Set up your profile so we can map your skill gap and career path.
+          Welcome{user?.firstName ? `, ${user.firstName}` : ""}. Upload your CV, then confirm your profile.
         </p>
       </div>
 
@@ -256,7 +294,7 @@ export default function OnboardingPage() {
               <li key={w}>{w}</li>
             ))}
           </ul>
-          {extractionMethod && extractionMethod !== "demo" && (
+          {extractionMethod && (
             <p className="mt-2 text-label-sm text-secondary">
               Text extracted via: {extractionMethod}
             </p>
@@ -298,15 +336,7 @@ export default function OnboardingPage() {
             )}
           </label>
 
-          <div className="flex flex-col items-center gap-3 sm:flex-row sm:justify-center">
-            <button
-              type="button"
-              onClick={loadDemo}
-              className="flex items-center gap-2 rounded-xl border border-primary bg-primary/5 px-5 py-2.5 text-label-md font-semibold text-primary hover:bg-primary/10"
-            >
-              <Icon name="science" size={18} />
-              Try Demo
-            </button>
+          <div className="flex justify-center">
             <button
               type="button"
               onClick={() => {
@@ -346,9 +376,11 @@ export default function OnboardingPage() {
               <input
                 type="email"
                 value={form.email}
-                onChange={(e) => updateForm({ email: e.target.value })}
-                className="w-full rounded-xl border border-outline-variant px-4 py-2.5 text-body-md focus:border-primary focus:outline-none"
+                readOnly
+                className="w-full cursor-not-allowed rounded-xl border border-outline-variant bg-surface-container-low px-4 py-2.5 text-body-md text-secondary focus:outline-none"
+                title="This is your signed-in email and cannot be changed here"
               />
+              <p className="mt-1 text-xs text-secondary">From your Clerk account — used to link your profile</p>
             </div>
             <div>
               <label className="mb-1 block text-label-md font-semibold">Phone</label>

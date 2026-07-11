@@ -171,6 +171,7 @@ export interface ApiProfile {
   education?: Array<Record<string, unknown>>;
   experience?: Array<Record<string, unknown>>;
   skills?: string[];
+  skills_source?: "manual" | "cv";
   target_role?: string;
   location?: string | null;
   time_per_week?: number | null;

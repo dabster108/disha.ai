@@ -37,6 +37,7 @@ import JourneyRing from "@/components/dashboard/JourneyRing";
 import ScoreRankSection from "@/components/dashboard/ScoreRankSection";
 import { saveJob, loadTrackedJobs, subscribeTrackedJobs } from "@/lib/applicationsStore";
 import { getLeaderboard } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 
 export default function DashboardPage() {
   const { profile, profileId, dashboard, dashboardLoading, refreshDashboard } = useProfile();
@@ -62,12 +63,15 @@ export default function DashboardPage() {
   useEffect(() => {
     if (!profileId) return;
     let cancelled = false;
-    getLeaderboard(profileId)
+    const cacheKey = `leaderboard:${profileId}`;
+    const cached = readCache(cacheKey);
+    if (cached.data) setLeaderboard(cached.data);
+    loadWithCache(cacheKey, () => getLeaderboard(profileId), CACHE_TTL.leaderboard)
       .then((res) => {
         if (!cancelled) setLeaderboard(res);
       })
       .catch(() => {
-        if (!cancelled) setLeaderboard(null);
+        if (!cancelled && !cached.data) setLeaderboard(null);
       });
     return () => {
       cancelled = true;

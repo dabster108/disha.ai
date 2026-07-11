@@ -9,6 +9,7 @@ import EmptyState from "@/components/ui/EmptyState";
 import SessionDurationPicker from "@/components/practice/SessionDurationPicker";
 import { useProfile } from "@/context/ProfileContext";
 import { getInterviewHistory, startInterview } from "@/lib/api";
+import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
 import {
   INTERVIEW_DURATION_OPTIONS,
   inferInterviewTrack,
@@ -31,8 +32,11 @@ export default function MockInterviewPage() {
   const { profile, profileId } = useProfile();
   const router = useRouter();
 
-  const [sessions, setSessions] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const cacheKey = `interviews:${profileId}`;
+  const initial = readCache(cacheKey);
+
+  const [sessions, setSessions] = useState(initial.data || []);
+  const [loading, setLoading] = useState(!initial.data);
   const [error, setError] = useState(null);
   const [starting, setStarting] = useState(false);
   // TEMP: default 1 min for testing — restore 15 later.
@@ -43,10 +47,11 @@ export default function MockInterviewPage() {
   const suggestedDifficulty = suggestInterviewDifficulty(profile || {});
 
   const load = async () => {
-    setLoading(true);
+    if (!profileId) return;
+    if (!sessions.length) setLoading(true);
     setError(null);
     try {
-      const data = await getInterviewHistory(profileId);
+      const data = await loadWithCache(cacheKey, () => getInterviewHistory(profileId), CACHE_TTL.interviews);
       setSessions(data);
     } catch (err) {
       setError(err);

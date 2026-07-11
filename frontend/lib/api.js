@@ -82,6 +82,12 @@ export function uploadResume(file) {
   return apiFetch("/api/profile/upload-resume", { method: "POST", body: form });
 }
 
+/** @param {string} clerkUserId @param {string} [email] */
+export function getProfileByClerk(clerkUserId, email) {
+  const params = email ? `?email=${encodeURIComponent(email)}` : "";
+  return apiFetch(`/api/profile/by-clerk/${encodeURIComponent(clerkUserId)}${params}`);
+}
+
 /** @param {object} payload */
 export function createProfile(payload) {
   return apiFetch("/api/profile", { method: "POST", json: payload });
