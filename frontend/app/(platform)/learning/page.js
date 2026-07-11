@@ -16,7 +16,7 @@ import {
   updateRoadmapNodeProgress,
   updateRoadmapProgress,
 } from "@/lib/api";
-import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
+import { CACHE_TTL, loadWithCache, readCache, writeCache } from "@/lib/resource-cache";
 import LessonModule from "@/components/learning/LessonModule";
 import InAppResourceViewer from "@/components/learning/InAppResourceViewer";
 import { resolveResourceConsume } from "@/lib/resourceConsume";
@@ -356,29 +356,52 @@ export default function LearningPage() {
   useEffect(() => {
     if (!profileId) return;
     let cancelled = false;
-    const hasCached = Boolean(readCache(curriculumKey).data);
-    if (!hasCached) setLoading(true);
-    loadWithCache(curriculumKey, () => getLatestCurriculum(profileId), CACHE_TTL.curriculum)
-      .then((data) => {
+
+    async function load() {
+      const hasCachedCurriculum = Boolean(readCache(curriculumKey).data);
+      if (!hasCachedCurriculum) setLoading(true);
+      setError(null);
+      setNeedsGap(false);
+
+      const roadmapPromise = loadWithCache(roadmapKey, () => getLatestRoadmap(profileId), CACHE_TTL.roadmap).catch(
+        (err) => {
+          if (isNotFound(err)) return null;
+          throw err;
+        }
+      );
+
+      try {
+        const data = await loadWithCache(curriculumKey, () => getLatestCurriculum(profileId), CACHE_TTL.curriculum);
         if (cancelled) return;
         setCurriculum(data);
         setMode("curriculum");
-      })
-      .catch((err) => {
+      } catch (err) {
         if (cancelled) return;
         if (!isNotFound(err)) setError(err);
-        setMode("roadmap");
-      })
-      .finally(() => {
+        try {
+          const roadmapData = await roadmapPromise;
+          if (cancelled) return;
+          if (roadmapData) setRoadmap(roadmapData);
+          else setNeedsGap(true);
+          setMode("roadmap");
+        } catch (roadmapErr) {
+          if (cancelled) return;
+          setError(roadmapErr);
+          setMode("roadmap");
+        }
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    }
+
+    load();
     return () => {
       cancelled = true;
     };
-  }, [profileId, curriculumKey]);
+  }, [profileId, curriculumKey, roadmapKey]);
 
   useEffect(() => {
-    if (mode !== "roadmap" || !profileId) return;
+    if (mode !== "roadmap" || !profileId || roadmap) return;
     let cancelled = false;
     loadWithCache(roadmapKey, () => getLatestRoadmap(profileId), CACHE_TTL.roadmap)
       .then((data) => {
@@ -391,13 +414,14 @@ export default function LearningPage() {
     return () => {
       cancelled = true;
     };
-  }, [mode, profileId, roadmapKey]);
+  }, [mode, profileId, roadmapKey, roadmap]);
 
   const handleGenerate = async (force = false) => {
     setGenerating(true);
     setError(null);
     try {
       const data = await generateCurriculum(profileId, force);
+      writeCache(curriculumKey, data, CACHE_TTL.curriculum);
       setCurriculum(data);
       setMode("curriculum");
     } catch (err) {
@@ -432,10 +456,11 @@ export default function LearningPage() {
       {mode === "roadmap" && !roadmap && !needsGap && (
         <div className="mb-8 flex flex-col items-start gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-8">
           <div>
-            <h3 className="text-headline-md font-bold text-on-surface">Generate your learning curriculum</h3>
+            <h3 className="text-headline-md font-bold text-on-surface">No curriculum generated yet</h3>
             <p className="mt-1 max-w-xl text-body-md text-secondary">
-              A sectioned, self-paced curriculum built from your skill gap — grounded in real
-              resources, not invented links.
+              The learning page checks for an AI-generated curriculum first (that 404 in the server log is
+              normal until you generate one). You can use your roadmap queue below, or build a sectioned
+              curriculum from your skill gap — it may take a couple of minutes.
             </p>
           </div>
           <button
@@ -444,7 +469,7 @@ export default function LearningPage() {
             disabled={generating}
             className="rounded-xl bg-primary px-6 py-3 text-label-md font-bold text-on-primary hover:bg-primary-container disabled:opacity-60"
           >
-            {generating ? "Generating..." : "Generate My Curriculum"}
+            {generating ? "Generating (1–3 min)..." : "Generate My Curriculum"}
           </button>
         </div>
       )}

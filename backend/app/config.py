@@ -109,6 +109,9 @@ class Settings(BaseSettings):
     mcp_context7_url: str | None = None
     mcp_context7_command: str | None = None
     mcp_context7_args: list[str] = []
+    # Sent as CONTEXT7_API_KEY on streamable_http requests — bills against your
+    # account quota instead of the shared anonymous pool.
+    mcp_context7_api_key: str | None = None
 
 
 @lru_cache

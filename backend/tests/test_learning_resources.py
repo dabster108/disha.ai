@@ -215,7 +215,7 @@ def test_async_build_resources_mcp_enabled_adds_docs_and_searched_video(monkeypa
     monkeypatch.setattr(lr, "fetch_library_docs", fake_docs)
     monkeypatch.setattr(lr, "search_learning_web", fake_search)
 
-    result = asyncio.run(lr.async_build_resources_for_skill("rust", limit=5))
+    result = asyncio.run(lr.async_build_resources_for_skill("tensorflow", limit=5))
 
     types = {r["type"] for r in result}
     assert "docs" in types
@@ -240,6 +240,26 @@ def test_async_build_resources_skips_search_when_catalog_video_exists(monkeypatc
     # "python" already has a catalog YouTube video — no need to search the web for one.
     asyncio.run(lr.async_build_resources_for_skill("python"))
     assert calls["search"] == 0
+
+
+def test_async_build_resources_skips_context7_for_unknown_theme_words(monkeypatch):
+    monkeypatch.setattr(lr, "get_settings", lambda: SimpleNamespace(mcp_enabled=True))
+    calls = {"docs": 0}
+
+    async def fake_docs(skill, topic=None):
+        calls["docs"] += 1
+        return None
+
+    async def fake_search(query):
+        return [{"title": "Troubleshooting tips", "url": "https://www.youtube.com/watch?v=abc123xyz01"}]
+
+    monkeypatch.setattr(lr, "fetch_library_docs", fake_docs)
+    monkeypatch.setattr(lr, "search_learning_web", fake_search)
+
+    result = asyncio.run(lr.async_build_resources_for_skill("Troubleshooting", limit=3))
+
+    assert calls["docs"] == 0
+    assert any(r["type"] == "video" for r in result)
 
 
 def test_async_build_resources_mcp_failure_falls_back_to_catalog(monkeypatch):

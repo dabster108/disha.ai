@@ -39,6 +39,16 @@ _NUMBERED_RESULT_RE = re.compile(r"^\s*\d+\.\s*(.+?)\s*\n\s*URL:\s*(\S+)", re.MU
 _BARE_URL_RE = re.compile(r"https?://[^\s)>\]]+")
 
 _CONTENT_MD_MAX_CHARS = 10_000
+_QUOTA_EXCEEDED_RE = re.compile(r"quota exceeded", re.IGNORECASE)
+_CONTEXT7_CONCURRENCY = 3
+_context7_semaphore: asyncio.Semaphore | None = None
+
+
+def _get_context7_semaphore() -> asyncio.Semaphore:
+    global _context7_semaphore
+    if _context7_semaphore is None:
+        _context7_semaphore = asyncio.Semaphore(_CONTEXT7_CONCURRENCY)
+    return _context7_semaphore
 
 
 def _connection_for(url: str | None, command: str | None, args: list[str] | None) -> dict[str, Any] | None:
@@ -64,6 +74,8 @@ def _client() -> MultiServerMCPClient | None:
         settings.mcp_context7_url, settings.mcp_context7_command, settings.mcp_context7_args
     )
     if ctx7:
+        if settings.mcp_context7_api_key:
+            ctx7 = {**ctx7, "headers": {"CONTEXT7_API_KEY": settings.mcp_context7_api_key}}
         connections[_CONTEXT7] = ctx7
 
     if not connections:
@@ -109,7 +121,12 @@ def _match_arg_name(tool, *fragments: str) -> str | None:
 
 async def _invoke(tool, args: dict) -> Any:
     settings = get_settings()
-    return await asyncio.wait_for(tool.ainvoke(args), timeout=settings.mcp_timeout_seconds)
+    try:
+        return await asyncio.wait_for(tool.ainvoke(args), timeout=settings.mcp_timeout_seconds)
+    except TimeoutError:
+        raise
+    except asyncio.CancelledError as exc:
+        raise TimeoutError from exc
 
 
 def _stringify(raw: Any) -> str:
@@ -219,33 +236,42 @@ async def fetch_library_docs(library: str, topic: str | None = None) -> dict | N
     resolve_query_arg = _match_arg_name(resolve_tool, "query")
     if resolve_query_arg:
         resolve_args[resolve_query_arg] = task_query
-    try:
-        resolved = await _invoke(resolve_tool, resolve_args)
-    except Exception:
-        logger.warning("mcp: context7 resolve-library-id failed for %r", library, exc_info=True)
-        return None
+    async with _get_context7_semaphore():
+        try:
+            resolved = await _invoke(resolve_tool, resolve_args)
+        except TimeoutError:
+            logger.warning("mcp: context7 resolve-library-id timed out for %r", library)
+            return None
+        except Exception:
+            logger.warning("mcp: context7 resolve-library-id failed for %r", library, exc_info=True)
+            return None
 
-    library_id = _extract_library_id(resolved)
-    if not library_id:
-        return None
+        library_id = _extract_library_id(resolved)
+        if not library_id:
+            return None
 
-    docs_id_arg = _match_arg_name(docs_tool, "id", "library") or "context7CompatibleLibraryID"
-    docs_args = {docs_id_arg: library_id}
-    # Some Context7-compatible servers call this "topic", others "query" — either
-    # way it's typically required, so always send something rather than only
-    # when a caller-supplied topic exists.
-    docs_query_arg = _match_arg_name(docs_tool, "topic", "query")
-    if docs_query_arg:
-        docs_args[docs_query_arg] = task_query
+        docs_id_arg = _match_arg_name(docs_tool, "id", "library") or "context7CompatibleLibraryID"
+        docs_args = {docs_id_arg: library_id}
+        # Some Context7-compatible servers call this "topic", others "query" — either
+        # way it's typically required, so always send something rather than only
+        # when a caller-supplied topic exists.
+        docs_query_arg = _match_arg_name(docs_tool, "topic", "query")
+        if docs_query_arg:
+            docs_args[docs_query_arg] = task_query
 
-    try:
-        raw_docs = await _invoke(docs_tool, docs_args)
-    except Exception:
-        logger.warning("mcp: context7 get-library-docs failed for %r", library_id, exc_info=True)
-        return None
+        try:
+            raw_docs = await _invoke(docs_tool, docs_args)
+        except TimeoutError:
+            logger.warning("mcp: context7 get-library-docs timed out for %r", library_id)
+            return None
+        except Exception:
+            logger.warning("mcp: context7 get-library-docs failed for %r", library_id, exc_info=True)
+            return None
 
     content_md = _stringify(raw_docs).strip()
-    if not content_md:
+    if not content_md or _QUOTA_EXCEEDED_RE.search(content_md):
+        if content_md and _QUOTA_EXCEEDED_RE.search(content_md):
+            logger.warning("mcp: context7 quota exceeded for %r — set MCP_CONTEXT7_API_KEY", library)
         return None
     if len(content_md) > _CONTENT_MD_MAX_CHARS:
         content_md = content_md[:_CONTENT_MD_MAX_CHARS].rstrip() + "\n\n…"

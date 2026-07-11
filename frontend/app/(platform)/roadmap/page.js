@@ -1,14 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import Icon from "@/components/ui/Icon";
 import LoadingState from "@/components/ui/LoadingState";
 import ErrorBanner from "@/components/ui/ErrorBanner";
 import EmptyState from "@/components/ui/EmptyState";
-import RoadmapPathHeader from "@/components/roadmap/RoadmapPathHeader";
-import RoadmapSkillPath from "@/components/roadmap/RoadmapSkillPath";
-import InAppResourceViewer from "@/components/learning/InAppResourceViewer";
+import { LegacyRoadmapView, PathRoadmapView, isTaskDone } from "@/components/roadmap/RoadmapExperience";
 import { resolveResourceConsume } from "@/lib/resourceConsume";
 import { useProfile } from "@/context/ProfileContext";
 import {
@@ -19,30 +15,6 @@ import {
   updateRoadmapProgress,
 } from "@/lib/api";
 import { CACHE_TTL, loadWithCache, readCache } from "@/lib/resource-cache";
-
-const TASK_TYPE_ICON = {
-  course: "play_circle",
-  project: "terminal",
-  practice: "fitness_center",
-};
-
-const RESOURCE_ICON = {
-  video: "play_circle",
-  article: "article",
-  docs: "menu_book",
-  course: "school",
-  practice: "fitness_center",
-};
-
-function isTaskDone(progress, week, taskIndex) {
-  return (progress?.completed || []).some((e) => e.week === week && e.task_index === taskIndex);
-}
-
-function isResourceDone(progress, week, taskIndex, resourceIndex) {
-  return (progress?.resources_completed || []).some(
-    (e) => e.week === week && e.task_index === taskIndex && e.resource_index === resourceIndex
-  );
-}
 
 export default function RoadmapPage() {
   const { profile, profileId } = useProfile();
@@ -102,10 +74,6 @@ export default function RoadmapPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [profileId]);
 
-  const toggleWeek = (week) => setExpanded((prev) => ({ ...prev, [week]: !prev[week] }));
-
-  // When a week just became fully complete, collapse it and open the next one
-  // so finishing a week naturally hands the student their next step.
   const advanceIfWeekComplete = (updated, week) => {
     const weekObj = updated.weeks.find((w) => w.week === week);
     if (!weekObj) return;
@@ -132,7 +100,11 @@ export default function RoadmapPage() {
   };
 
   const toggleResource = async (week, taskIndex, resourceIndex, forceDone) => {
-    const markingDone = forceDone ?? !isResourceDone(roadmap.progress, week, taskIndex, resourceIndex);
+    const markingDone =
+      forceDone ??
+      !((roadmap.progress?.resources_completed || []).some(
+        (e) => e.week === week && e.task_index === taskIndex && e.resource_index === resourceIndex
+      ));
     try {
       const updated = await updateRoadmapProgress(profileId, week, taskIndex, markingDone, resourceIndex);
       setRoadmap(updated);
@@ -154,9 +126,6 @@ export default function RoadmapPage() {
     }
   };
 
-  // Task resources (legacy week format) open in-app; studying one long
-  // enough offers to mark it complete via the same toggleResource the
-  // manual checkbox uses.
   const openTaskResource = (week, taskIndex, resourceIndex, resource) => {
     setActiveResource({
       resource: resolveResourceConsume(resource),
@@ -203,264 +172,28 @@ export default function RoadmapPage() {
 
   if (!roadmap) return null;
 
-  // New roadmaps carry a full roadmap.sh-style skill path from zero. Older
-  // roadmaps only have the legacy week accordion — keep that working as-is.
-  if (roadmap.path) {
-    return (
-      <div className="mx-auto max-w-container-max px-margin-desktop py-12">
-        <RoadmapPathHeader path={roadmap.path} progress={roadmap.progress} targetRole={profile?.target_role} />
-
-        <RoadmapSkillPath
-          path={roadmap.path}
-          progress={roadmap.progress}
+  return (
+    <div className="roadmap-page mx-auto max-w-[1400px] px-4 py-8 md:px-8 md:py-12 lg:px-12">
+      {roadmap.path ? (
+        <PathRoadmapView
+          roadmap={roadmap}
+          profile={profile}
           onToggleNode={toggleNode}
           togglingNodeId={togglingNodeId}
+          onRegenerate={() => generateFresh({ force_replan: true })}
         />
-
-        <div className="mt-10 flex flex-col items-center gap-4 text-center">
-          <button
-            type="button"
-            onClick={() => generateFresh({ force_replan: true })}
-            className="text-label-md text-secondary hover:text-primary hover:underline"
-          >
-            Regenerate path from latest skill gap
-          </button>
-          <Link href="/skill-gap" className="text-label-md text-secondary hover:text-primary hover:underline">
-            Back to Skill Gap Analysis
-          </Link>
-        </div>
-      </div>
-    );
-  }
-
-  const completedCount = (roadmap.progress?.completed || []).length;
-  const totalTasks = roadmap.weeks.reduce((sum, w) => sum + w.tasks.length, 0);
-  const pct = totalTasks > 0 ? Math.round((completedCount / totalTasks) * 100) : 0;
-
-  const roadmapComplete = totalTasks > 0 && completedCount === totalTasks;
-
-  return (
-    <div className="mx-auto max-w-container-max px-margin-desktop py-12">
-      {roadmapComplete && (
-        <div className="mb-10 flex flex-col items-start gap-4 rounded-2xl border border-primary/20 bg-primary/5 p-8 sm:flex-row sm:items-center sm:justify-between">
-          <div className="flex items-center gap-4">
-            <div className="flex h-14 w-14 shrink-0 items-center justify-center rounded-full bg-primary text-on-primary">
-              <Icon name="celebration" filled />
-            </div>
-            <div>
-              <h3 className="text-headline-md font-bold text-on-surface">Roadmap complete!</h3>
-              <p className="text-body-md text-secondary">
-                You&apos;ve finished every task. Re-run your skill gap analysis to see how much
-                your readiness score has improved.
-              </p>
-            </div>
-          </div>
-          <Link
-            href="/skill-gap"
-            className="shrink-0 rounded-xl bg-primary px-6 py-3 text-label-md font-bold text-on-primary transition-all hover:bg-primary-container"
-          >
-            Re-run Skill Gap Analysis
-          </Link>
-        </div>
+      ) : (
+        <LegacyRoadmapView
+          roadmap={roadmap}
+          profile={profile}
+          onToggleTask={toggleTask}
+          onOpenTaskResource={openTaskResource}
+          activeResource={activeResource}
+          onCloseResource={() => setActiveResource(null)}
+          onResourceStudied={handleResourceStudied}
+          completingResource={completingResource}
+        />
       )}
-
-      <div className="mb-16 flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
-        <div>
-          <h3 className="mb-2 text-display-lg text-on-surface">Your Career Roadmap</h3>
-          <p className="max-w-2xl text-body-lg text-on-surface-variant">
-            {roadmap.summary || `A ${roadmap.total_weeks}-week plan to close your skill gap for ${profile?.target_role}.`}
-          </p>
-        </div>
-        <div className="flex gap-4">
-          <div className="text-right">
-            <p className="mb-1 text-label-sm uppercase tracking-widest text-secondary">
-              Progress
-            </p>
-            <p className="text-headline-md font-bold text-primary">{pct}% Completed</p>
-          </div>
-          <div className="h-12 w-px bg-outline-variant" />
-          <div className="text-right">
-            <p className="mb-1 text-label-sm uppercase tracking-widest text-secondary">
-              Total Duration
-            </p>
-            <p className="text-headline-md font-bold text-on-surface">
-              {roadmap.total_weeks} weeks
-            </p>
-          </div>
-        </div>
-      </div>
-
-      <div className="space-y-6">
-        {roadmap.weeks.map((week) => {
-          const doneInWeek = week.tasks.filter((_, i) => isTaskDone(roadmap.progress, week.week, i)).length;
-          const weekComplete = doneInWeek === week.tasks.length && week.tasks.length > 0;
-          return (
-            <div
-              key={week.week}
-              className={`week-card group overflow-hidden rounded-2xl border bg-white transition-all duration-300 hover:shadow-ambient ${
-                expanded[week.week] ? "expanded border-2 border-primary" : "border-outline-variant"
-              }`}
-            >
-              <button
-                type="button"
-                className="flex w-full cursor-pointer items-center gap-6 p-8 text-left"
-                onClick={() => toggleWeek(week.week)}
-              >
-                <div
-                  className={`flex h-14 w-14 items-center justify-center rounded-full ${
-                    weekComplete ? "bg-green-50 text-green-600" : "bg-primary/10 text-primary"
-                  }`}
-                >
-                  <Icon name={weekComplete ? "check_circle" : "bolt"} filled />
-                </div>
-                <div className="flex-1">
-                  <span className="mb-1 block text-label-md uppercase tracking-wider text-secondary">
-                    Week {week.week} • {doneInWeek}/{week.tasks.length} tasks
-                  </span>
-                  <h4 className="text-headline-md font-semibold text-on-surface">{week.theme}</h4>
-                </div>
-                <div className="mr-4 flex items-center gap-8">
-                  <div className="text-center">
-                    <p className="text-[11px] font-bold uppercase text-secondary">Hours</p>
-                    <p className="text-label-md">{week.hours}h</p>
-                  </div>
-                  <Icon
-                    name="expand_more"
-                    className={`text-secondary transition-transform duration-300 ${expanded[week.week] ? "rotate-180" : ""}`}
-                  />
-                </div>
-              </button>
-
-              {expanded[week.week] && (
-                <div className="border-t border-outline-variant/30 p-8 pt-6">
-                  <div className="space-y-3">
-                    {week.tasks.map((task, i) => {
-                      const done = isTaskDone(roadmap.progress, week.week, i);
-                      const resources = task.resources || [];
-                      const hasResources = resources.length > 0;
-                      return (
-                        <div
-                          key={`${task.title}-${i}`}
-                          className={`rounded-xl border p-4 ${
-                            done ? "border-green-200 bg-green-50/50" : "border-outline-variant bg-surface-bright"
-                          }`}
-                        >
-                          <div className="flex items-start gap-4">
-                            <button
-                              type="button"
-                              onClick={() => !hasResources && toggleTask(week.week, i)}
-                              disabled={hasResources}
-                              title={hasResources ? "Completes automatically when all resources are done" : "Mark task complete"}
-                              className={`mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-                                done ? "border-green-500 bg-green-500 text-white" : "border-outline-variant"
-                              } ${hasResources ? "cursor-default" : ""}`}
-                            >
-                              {done && <Icon name="check" size={14} />}
-                            </button>
-                            <Icon
-                              name={TASK_TYPE_ICON[task.type] || "task_alt"}
-                              className={done ? "text-green-600" : "text-primary"}
-                            />
-                            <div className="flex-1">
-                              <p className={`text-label-md font-bold ${done ? "text-secondary line-through" : "text-on-surface"}`}>
-                                {task.title}
-                              </p>
-                              <p className="text-sm text-secondary">
-                                <span className="uppercase">{task.skill}</span>
-                                {hasResources && (
-                                  <>
-                                    {" • "}
-                                    {resources.filter((_, ri) => isResourceDone(roadmap.progress, week.week, i, ri)).length}
-                                    /{resources.length} resources done
-                                  </>
-                                )}
-                              </p>
-                            </div>
-                          </div>
-
-                          {hasResources && (
-                            <div className="mt-4 space-y-2 pl-10">
-                              {resources.map((res, ri) => {
-                                const resDone = isResourceDone(roadmap.progress, week.week, i, ri);
-                                const resolved = resolveResourceConsume(res);
-                                const openable = resolved.consume === "embed" || resolved.consume === "markdown";
-                                return (
-                                  <div
-                                    key={`${res.url}-${ri}`}
-                                    className={`flex items-center gap-3 rounded-lg border p-3 transition-colors ${
-                                      resDone ? "border-green-200 bg-green-50/40" : "border-outline-variant bg-white"
-                                    }`}
-                                  >
-                                    <button
-                                      type="button"
-                                      onClick={() => toggleResource(week.week, i, ri)}
-                                      title={resDone ? "Mark as not done" : "Mark as completed"}
-                                      className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full border-2 transition-colors ${
-                                        resDone ? "border-green-500 bg-green-500 text-white" : "border-outline-variant"
-                                      }`}
-                                    >
-                                      {resDone && <Icon name="check" size={12} />}
-                                    </button>
-                                    <Icon
-                                      name={RESOURCE_ICON[res.type] || "link"}
-                                      size={18}
-                                      className={resDone ? "text-green-600" : "text-primary"}
-                                    />
-                                    <button
-                                      type="button"
-                                      disabled={!openable}
-                                      onClick={() => openable && !resDone && openTaskResource(week.week, i, ri, res)}
-                                      className={`min-w-0 flex-1 text-left ${openable ? "" : "cursor-not-allowed opacity-50"}`}
-                                    >
-                                      <p className={`truncate text-sm font-semibold ${resDone ? "text-secondary line-through" : "text-on-surface hover:text-primary"}`}>
-                                        {res.title}
-                                      </p>
-                                      <p className="truncate text-xs text-secondary">
-                                        {res.provider}
-                                        {res.duration ? ` • ${res.duration}` : ""}
-                                        {" • "}
-                                        <span className="uppercase">{res.type}</span>
-                                        {!openable ? " • unavailable in-app" : ""}
-                                      </p>
-                                    </button>
-                                    <span
-                                      className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-                                        res.cost === "paid"
-                                          ? "bg-tertiary-fixed text-on-tertiary-fixed"
-                                          : "bg-primary/10 text-primary"
-                                      }`}
-                                    >
-                                      {res.cost}
-                                    </span>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </div>
-                </div>
-              )}
-            </div>
-          );
-        })}
-      </div>
-
-      <div className="mt-20 flex flex-col items-center gap-4 text-center">
-        <Link href="/skill-gap" className="text-label-md text-secondary hover:text-primary hover:underline">
-          Back to Skill Gap Analysis
-        </Link>
-      </div>
-
-      <InAppResourceViewer
-        key={activeResource?.resource?.url ?? "no-resource"}
-        resource={activeResource?.resource}
-        onClose={() => setActiveResource(null)}
-        onComplete={handleResourceStudied}
-        completing={completingResource}
-      />
     </div>
   );
 }

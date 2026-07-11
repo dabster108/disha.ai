@@ -25,6 +25,7 @@ import re
 from app.config import get_settings
 from app.services.mcp_client import fetch_library_docs, search_learning_web
 from app.services.skill_gap import normalize_skill_name
+from app.services.skills_catalog import normalize_skill as catalog_normalize_skill
 
 # A resource dict shape:
 #   {title, url, provider, type, cost, duration, embed_url, consume, content_md}
@@ -221,6 +222,16 @@ def _budget_allows_paid(budget: str | None) -> bool:
     return "free" not in budget.strip().casefold()
 
 
+def _context7_eligible(skill: str) -> bool:
+    """Context7 indexes software libraries, not roadmap theme words like
+    ``Troubleshooting``. Only call it for curated catalog skills or names
+    recognized by the skills catalog (e.g. ``Flutter``, ``React``)."""
+    key = normalize_skill_name(skill)
+    if key in _CATALOG:
+        return True
+    return catalog_normalize_skill(skill) is not None
+
+
 async def async_build_resources_for_skill(skill: str, *, budget: str | None = "free", limit: int = 3) -> list[dict]:
     """The one resource builder for every student-facing surface (roadmap
     tasks/nodes, learning-curriculum modules). Only returns resources the
@@ -240,9 +251,10 @@ async def async_build_resources_for_skill(skill: str, *, budget: str | None = "f
 
     settings = get_settings()
     if settings.mcp_enabled:
-        docs = await fetch_library_docs(skill)
-        if docs:
-            resources.append(normalize_resource(docs))
+        if _context7_eligible(skill):
+            docs = await fetch_library_docs(skill)
+            if docs:
+                resources.append(normalize_resource(docs))
 
         if not any(r["type"] == "video" for r in resources):
             found = await search_learning_web(f"{skill} tutorial site:youtube.com")
@@ -287,7 +299,15 @@ def _needs_regeneration(resources: list[dict] | None) -> bool:
     UI may pick any entry to show first."""
     if not resources:
         return True
-    return not all(r.get("consume") in ("embed", "markdown") for r in resources)
+    if not all(r.get("consume") in ("embed", "markdown") for r in resources):
+        return True
+    for resource in resources:
+        if resource.get("consume") != "markdown":
+            continue
+        content_md = (resource.get("content_md") or "").strip()
+        if not content_md or "quota exceeded" in content_md.casefold():
+            return True
+    return False
 
 
 async def attach_resources_to_weeks(weeks: list[dict], *, budget: str | None = "free") -> bool:
