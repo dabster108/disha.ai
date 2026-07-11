@@ -16,6 +16,14 @@
   Agentic RAG + LangGraph — from CV to job-ready on Nepal market data
 </p>
 
+<p align="center">
+  <img src="frontend/components/images/hero.png" alt="DISHA AI student dashboard" width="900" />
+</p>
+
+<p align="center">
+  <img src="frontend/components/images/roadmap.png" alt="DISHA AI Backend Engineer roadmap canvas" width="900" />
+</p>
+
 ---
 
 ## What is DISHA AI
@@ -39,18 +47,10 @@ postings, and an interview or practice session must actually happen before a ski
 ## Product glimpses
 
 Student **command center** — readiness score, journey progress, analytics, and the next action
-for a chosen goal (e.g. Backend Engineer):
-
-<p align="center">
-  <img src="frontend/components/images/hero.png" alt="DISHA AI student dashboard" width="900" />
-</p>
+for a chosen goal (e.g. Backend Engineer).
 
 **Full skill-path roadmap** — milestone columns (Foundations → Core → Advanced → Job Ready),
-profile-credited skills, XP/time estimates, and an interactive pan/zoom canvas:
-
-<p align="center">
-  <img src="frontend/components/images/roadmap.png" alt="DISHA AI Backend Engineer roadmap canvas" width="900" />
-</p>
+profile-credited skills, XP/time estimates, and an interactive pan/zoom canvas.
 
 ## Architecture
 
