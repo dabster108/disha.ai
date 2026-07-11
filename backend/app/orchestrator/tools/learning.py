@@ -2,11 +2,12 @@
 
 Each tool wraps one existing implementation — never a second copy of the same
 lookup — so the curriculum agent (or any future agent) reads the same ground
-truth as the rest of the app. Resource URLs always come from
-`search_learning_resources_tool`, which delegates to
-`app.services.learning_resources.build_resources_for_skill` (a curated
-catalog + deterministic search deep-links) — the LLM is never the source of
-a URL, so it cannot hallucinate one.
+truth as the rest of the app.
+
+Lesson prose (explanation/steps/examples/mini-checks) is written by the LLM.
+Real clickable resources are attached via ``get_learning_resources_tool`` /
+``build_resources_for_skill`` — curated catalog + search deep-links, never
+LLM-invented URLs.
 """
 
 from __future__ import annotations
@@ -93,17 +94,19 @@ async def get_roadmap_skeleton_tool(profile_id: str) -> dict:
 
 
 @tool
-def search_learning_resources_tool(skill: str, budget: str | None = "free") -> list[dict]:
-    """Real, clickable learning resources for one skill (title, url, provider, type, cost,
-    duration) — curated links or deterministic search deep-links. Never invent a URL not
-    returned by this tool."""
-    return build_resources_for_skill(skill, budget=budget)
-
-
-@tool
 def normalize_skill_tool(skill: str) -> str | None:
     """Resolve a free-text skill name to its canonical catalog name, or null if unrecognized."""
     return normalize_skill(skill)
+
+
+@tool
+def get_learning_resources_tool(skill: str, budget: str = "free", limit: int = 3) -> list[dict]:
+    """Fetch real learning resources (docs/video/course) for a skill, filtered by budget.
+
+    Returns curated catalog links first, then YouTube/freeCodeCamp search deep-links.
+    Never invents URLs — same ground truth as the roadmap resource layer.
+    """
+    return build_resources_for_skill(skill, budget=budget, limit=limit)
 
 
 LEARNING_TOOLS = [
@@ -111,6 +114,6 @@ LEARNING_TOOLS = [
     get_priority_skills_tool,
     get_skills_for_role_tool,
     get_roadmap_skeleton_tool,
-    search_learning_resources_tool,
     normalize_skill_tool,
+    get_learning_resources_tool,
 ]

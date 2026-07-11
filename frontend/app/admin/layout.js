@@ -22,17 +22,13 @@ const NAV = [
   { href: "/admin/skills", label: "Skills Catalog", icon: "school" },
 ];
 
-function ConfigWarning() {
+function ConfigWarning({ title, children }) {
   return (
     <div className="flex min-h-screen items-center justify-center bg-surface px-6">
       <div className="w-full max-w-md rounded-2xl border border-error/30 bg-error-container/20 p-8 text-center">
         <Icon name="warning" size={32} className="mx-auto mb-3 text-error" />
-        <p className="text-headline-sm font-bold text-on-surface">Admin key not configured</p>
-        <p className="mt-2 text-sm text-secondary">
-          Set <code>NEXT_PUBLIC_ADMIN_API_KEY</code> in <code>frontend/.env.local</code> to the
-          same value as the backend&apos;s <code>ADMIN_API_KEY</code>, then restart the dev
-          server.
-        </p>
+        <p className="text-headline-sm font-bold text-on-surface">{title}</p>
+        <p className="mt-2 text-sm text-secondary">{children}</p>
       </div>
     </div>
   );
@@ -40,7 +36,8 @@ function ConfigWarning() {
 
 export default function AdminLayout({ children }) {
   const pathname = usePathname();
-  const [status, setStatus] = useState("checking"); // checking | ok | error
+  const [status, setStatus] = useState("checking"); // checking | ok | unconfigured | error
+  const [errorDetail, setErrorDetail] = useState("");
 
   useEffect(() => {
     if (!process.env.NEXT_PUBLIC_ADMIN_API_KEY) {
@@ -49,11 +46,31 @@ export default function AdminLayout({ children }) {
     }
     getAdminStats()
       .then(() => setStatus("ok"))
-      .catch(() => setStatus("error"));
+      .catch((err) => {
+        setErrorDetail(err?.message || "Could not reach the admin API");
+        setStatus("error");
+      });
   }, []);
 
   if (status === "checking") return null;
-  if (status === "unconfigured" || status === "error") return <ConfigWarning />;
+  if (status === "unconfigured") {
+    return (
+      <ConfigWarning title="Admin key not configured">
+        Set <code>NEXT_PUBLIC_ADMIN_API_KEY</code> in <code>frontend/.env.local</code> to the
+        same value as the backend&apos;s <code>ADMIN_API_KEY</code>, then restart the dev
+        server.
+      </ConfigWarning>
+    );
+  }
+  if (status === "error") {
+    return (
+      <ConfigWarning title="Admin API unavailable">
+        {errorDetail}. Make sure the backend is running on port 8000 (
+        <code>uv run uvicorn app.main:app --reload --port 8000</code>
+        ), then refresh.
+      </ConfigWarning>
+    );
+  }
 
   return (
     <div className="flex min-h-screen bg-surface">

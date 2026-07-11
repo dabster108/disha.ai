@@ -6,13 +6,27 @@ per role instead of free text.
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException
+from pydantic import BaseModel
 
 from app.services.skills_catalog import aliases, all_skills, load_catalog, skills_for_role
 
 router = APIRouter(prefix="/api/skills", tags=["skills"])
 
 
-@router.get("")
+class SkillsCatalogResponse(BaseModel):
+    version: int
+    roles: dict[str, list[str]]
+    global_skills: list[str]
+    all_skills: list[str]
+    aliases: dict[str, str]
+
+
+class SkillsByRoleResponse(BaseModel):
+    role: str
+    skills: list[str]
+
+
+@router.get("", response_model=SkillsCatalogResponse)
 async def get_catalog() -> dict:
     catalog = load_catalog()
     return {
@@ -24,7 +38,7 @@ async def get_catalog() -> dict:
     }
 
 
-@router.get("/by-role")
+@router.get("/by-role", response_model=SkillsByRoleResponse)
 async def get_skills_by_role(role: str | None = None) -> dict:
     if not role or not role.strip():
         raise HTTPException(status_code=422, detail="Query param 'role' is required")

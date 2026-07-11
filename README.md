@@ -12,10 +12,9 @@
   Next.js 16 · FastAPI · LangGraph · Chroma · Neon Postgres
 </p>
 
-```
-$ disha-ai --engine "Agentic RAG + LangGraph Orchestrator" --market "Nepal" --status "job-ready"
-> intake → gap → route → roadmap → save   [4-signal skill gap · explainable job matching · human-verified]
-```
+<p align="center">
+  Agentic RAG + LangGraph — from CV to job-ready on Nepal market data
+</p>
 
 ---
 
@@ -109,7 +108,7 @@ interview, with an edge-tts/text-only fallback), and the job portals themselves.
 | **Skill gap with evidence** | Four-signal merge (claimed / market / interview / practice) with a validation panel showing exactly which signals back each verdict and an accuracy level (High/Medium/Low). |
 | **Multi-factor job matching** | Explainable scoring across skills, role similarity, seniority, domain, education, and location — with role-conflict rules so "AI Engineer" doesn't match "AI Instructor" and generic keywords don't inflate scores. |
 | **Roadmap + auto-progress** | A personalized, budget/time-constrained learning path; opening a resource starts a dwell timer that prompts to mark it complete instead of requiring a blind manual checkbox. |
-| **Learning curriculum agent** | A separate Mistral agent (its own key/quota) turns the skill gap into a sectioned, module-based curriculum — the LLM only ever picks which catalog skill each module teaches, never a URL; every resource link comes from a curated/deterministic lookup, so nothing is hallucinated. |
+| **Learning curriculum agent** | A separate Mistral agent (its own key/quota) turns the skill gap into a sectioned, module-based curriculum of self-contained in-app lessons — explanation, steps, worked examples, and mini self-checks, written directly by the LLM and read entirely inside DISHA, with no external links out to YouTube/docs/other sites. |
 | **Leaderboard category scores** | Real per-category scores (interview, practice, skill gap, roadmap %) — no synthetic users, only actual completed sessions. |
 | **Admin panel** | `/admin`, same DISHA visual language as the student app, no login screen (dev-mode key from env) — platform stats, every student's full verification dossier, and read-only access to every interview report, practice session, gap snapshot, and roadmap across all students. |
 

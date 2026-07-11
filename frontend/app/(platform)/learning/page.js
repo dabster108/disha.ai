@@ -17,6 +17,7 @@ import {
   updateRoadmapProgress,
 } from "@/lib/api";
 import StudyTrackerChip from "@/components/learning/StudyTrackerChip";
+import LessonModule from "@/components/learning/LessonModule";
 import { useResourceStudyTracker } from "@/hooks/useResourceStudyTracker";
 
 const RESOURCE_ICON = {
@@ -82,7 +83,7 @@ function isModuleDone(progress, sectionId, moduleId) {
   return (progress?.completed_modules || []).some((e) => e.key === `${sectionId}:${moduleId}`);
 }
 
-/** Curriculum view — agent-generated, sectioned, module-based. */
+/** Curriculum view — personalized lessons + real per-skill study resources. */
 function CurriculumView({ profileId, curriculum, setCurriculum, onRegenerate, regenerating }) {
   const [toggling, setToggling] = useState(null);
 
@@ -90,12 +91,12 @@ function CurriculumView({ profileId, curriculum, setCurriculum, onRegenerate, re
   const completedModules = (curriculum.progress?.completed_modules || []).length;
   const pct = totalModules > 0 ? Math.round((completedModules / totalModules) * 100) : 0;
 
-  const toggleModule = async (sectionId, moduleId, forceDone) => {
+  const toggleModule = async (sectionId, moduleId, forceDone, source = "manual") => {
     const key = `${sectionId}:${moduleId}`;
     setToggling(key);
     const markDone = forceDone ?? !isModuleDone(curriculum.progress, sectionId, moduleId);
     try {
-      const updated = await updateCurriculumProgress(profileId, sectionId, moduleId, markDone, forceDone ? "open" : "manual");
+      const updated = await updateCurriculumProgress(profileId, sectionId, moduleId, markDone, source);
       setCurriculum(updated);
     } catch {
       // non-fatal — leave state as-is, user can retry
@@ -103,12 +104,6 @@ function CurriculumView({ profileId, curriculum, setCurriculum, onRegenerate, re
       setToggling(null);
     }
   };
-
-  const studyTracker = useResourceStudyTracker({
-    onComplete: async (tracked) => {
-      await toggleModule(tracked.sectionId, tracked.moduleId, true);
-    },
-  });
 
   return (
     <>
@@ -145,68 +140,20 @@ function CurriculumView({ profileId, curriculum, setCurriculum, onRegenerate, re
               {section.modules.map((module) => {
                 const done = isModuleDone(curriculum.progress, section.id, module.id);
                 const key = `${section.id}:${module.id}`;
-                const isToggling = toggling === key;
-                const firstResource = module.resources?.[0];
                 return (
-                  <div
+                  <LessonModule
                     key={module.id}
-                    className={`card-hover flex items-center gap-4 rounded-2xl border bg-white p-5 transition-all ${
-                      done ? "border-outline-variant opacity-70" : "border-outline-variant"
-                    }`}
-                  >
-                    <button
-                      type="button"
-                      onClick={() => toggleModule(section.id, module.id)}
-                      disabled={isToggling}
-                      aria-label={done ? "Mark incomplete" : "Mark complete"}
-                      className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full transition-colors ${
-                        done ? "bg-primary text-on-primary" : "border-2 border-dashed border-outline-variant text-outline hover:border-primary"
-                      }`}
-                    >
-                      <Icon name={done ? "check" : isToggling ? "hourglass_empty" : "radio_button_unchecked"} size={20} />
-                    </button>
-                    <div className="min-w-0 flex-1">
-                      <p className={`text-label-sm font-bold uppercase tracking-wider ${done ? "text-secondary" : "text-primary"}`}>
-                        {module.skill}
-                      </p>
-                      <p className="text-body-md font-semibold text-on-surface">{module.title}</p>
-                      <p className="text-sm text-secondary line-clamp-1">{module.description}</p>
-                    </div>
-                    {firstResource?.url && (
-                      <a
-                        href={firstResource.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        onClick={() =>
-                          studyTracker.startTracking({
-                            key,
-                            title: firstResource.title,
-                            sectionId: section.id,
-                            moduleId: module.id,
-                          })
-                        }
-                        className="flex shrink-0 items-center gap-1 rounded-xl bg-primary px-4 py-2 text-label-md font-bold text-on-primary hover:bg-primary-container"
-                      >
-                        <Icon name={RESOURCE_ICON[firstResource.type] || "menu_book"} size={18} />
-                        Open
-                      </a>
-                    )}
-                  </div>
+                    module={module}
+                    done={done}
+                    isToggling={toggling === key}
+                    onToggle={(forceDone, source) => toggleModule(section.id, module.id, forceDone, source)}
+                  />
                 );
               })}
             </div>
           </section>
         ))}
       </div>
-
-      <StudyTrackerChip
-        active={studyTracker.active}
-        pendingConfirm={studyTracker.pendingConfirm}
-        onMarkDone={studyTracker.markDoneNow}
-        onDismiss={studyTracker.dismiss}
-        onConfirmYes={studyTracker.confirmYes}
-        onConfirmNo={studyTracker.confirmNo}
-      />
     </>
   );
 }

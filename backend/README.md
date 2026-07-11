@@ -179,24 +179,30 @@ curl -X POST http://127.0.0.1:8000/api/admin/scrape \
 
 `app/services/learning_agent.py` (Mistral, `MISTRAL_API_KEY3` — falls back to
 `MISTRAL_API_KEY2`'s quota if unset) generates a sectioned, module-based curriculum from the
-student's skill gap — separate from the week-by-week roadmap. The LLM only ever writes a
-module's title, description, and which single catalog skill it teaches; it never writes a URL.
-Every module's `resources` are attached afterward from
-`app.services.learning_resources.build_resources_for_skill()` (curated catalog + deterministic
-search deep-links), and every module's skill is passed through
-`skills_catalog.normalize_skill()` — a skill the catalog doesn't recognize is dropped rather
-than kept as free text. Context (priority skills, the role's catalog skills, the existing
-roadmap skeleton) is gathered via `app/orchestrator/tools/learning.py`'s `@tool`-decorated
-functions before the single structured-output LLM call — the same "tools gather grounded
-context, then one reliable structured call" shape as interview/practice/roadmap/gap narrative,
-rather than a multi-turn tool-calling agent loop. Falls back to a deterministic one-module-
-per-priority-skill curriculum if the LLM call fails.
+student's skill gap — separate from the week-by-week roadmap. Every module IS a self-contained
+lesson: the LLM writes the explanation (2-4 paragraphs teaching the concept directly), 3-5
+steps, 1-2 worked examples, and 1-2 mini self-check questions with answers — there is no
+external resource link anywhere in a module; the student reads and works through the lesson
+entirely inside DISHA. Every module's skill is passed through `skills_catalog.normalize_skill()`
+— a skill the catalog doesn't recognize is dropped rather than kept as free text. Context
+(priority skills, the role's catalog skills, the existing roadmap skeleton) is gathered via
+`app/orchestrator/tools/learning.py`'s `@tool`-decorated functions before the single
+structured-output LLM call — the same "tools gather grounded context, then one reliable
+structured call" shape as interview/practice/roadmap/gap narrative, rather than a multi-turn
+tool-calling agent loop. The Mistral client sets an explicit generous `max_tokens` (16000) —
+without it, the default silently truncated a full 2-3-section curriculum mid-module, which
+surfaced as a swallowed pydantic validation error rather than a visible failure. Falls back to
+a deterministic one-module-per-priority-skill curriculum (no LLM) if the call still fails.
+
+In the UI, a module is marked complete either by the manual checkbox at any time, or by
+scrolling to the end of its lesson content, which triggers a one-time confirm prompt (never a
+silent auto-tick) — see `frontend/components/learning/LessonModule.jsx`.
 
 | Endpoint | What it does |
 |---|---|
 | `POST /api/learning/generate` | `{profile_id, force?}` → generates (or returns the existing active one, unless `force`) |
 | `GET /api/learning/{profile_id}` | latest active curriculum |
-| `PATCH /api/learning/{profile_id}/progress` | `{section_id, module_id, completed, source: open\|manual\|scroll_prompt}` — also best-effort marks a matching roadmap node/task complete if the skill matches, so finishing a module advances both views |
+| `PATCH /api/learning/{profile_id}/progress` | `{section_id, module_id, completed, source: manual\|scroll_complete}` — also best-effort marks a matching roadmap node/task complete if the skill matches, so finishing a module advances both views |
 
 ## Profile / CV endpoints
 

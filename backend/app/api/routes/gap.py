@@ -58,6 +58,28 @@ class MarketGapRequest(BaseModel):
     target_role: str | None = None
 
 
+class SkillDemand(BaseModel):
+    skill: str
+    jobs_requiring: int
+
+
+class SampleJobOut(BaseModel):
+    title: str
+    company: str | None = None
+    location: str | None = None
+    source_url: str | None = None
+    similarity: float
+
+
+class MarketGapResponse(BaseModel):
+    target_role: str
+    jobs_analyzed: int
+    matched_skills: list[SkillDemand]
+    missing_skills: list[SkillDemand]
+    match_ratio: float
+    sample_jobs: list[SampleJobOut]
+
+
 @router.post("/gap", response_model=SnapshotOut, status_code=201)
 async def combined_gap(payload: CombinedGapRequest, db: AsyncSession = Depends(get_db)) -> SkillGapSnapshot:
     settings = get_settings()
@@ -132,7 +154,7 @@ async def combined_gap(payload: CombinedGapRequest, db: AsyncSession = Depends(g
     return SnapshotOut.model_validate(snapshot).model_copy(update={"roadmap_id": roadmap_id})
 
 
-@router.post("/gap/market")
+@router.post("/gap/market", response_model=MarketGapResponse)
 async def market_gap(payload: MarketGapRequest, db: AsyncSession = Depends(get_db)) -> dict:
     if payload.profile_id is not None:
         profile = await db.get(StudentProfile, payload.profile_id)

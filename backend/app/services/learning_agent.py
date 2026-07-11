@@ -1,31 +1,21 @@
 """Learning curriculum agent — generates a sectioned, module-based curriculum
-grounded in the student's actual skill gap and target role.
+grounded in the student's skill gap, profile constraints, and target role.
 
-Ground rules that make this reliable rather than a black box:
-- The LLM (Mistral, MISTRAL_API_KEY3) only ever writes a module's title,
-  description, and which single catalog skill it teaches — it never writes a
-  URL. Every module's `resources` are attached afterward from
-  `app.services.learning_resources.build_resources_for_skill()` (a curated
-  catalog + deterministic search deep-links), so no resource link is ever
-  LLM-invented.
-- Every module's skill is passed through `skills_catalog.normalize_skill()`;
-  a skill the catalog doesn't recognize is dropped rather than kept as
-  free text, so "skills catalog for all skill names" holds here too.
-- Context (priority skills, role's catalog skills, roadmap skeleton) is
-  gathered via the same tool functions in
-  `app.orchestrator.tools.learning` before the LLM call — grounding the
-  curriculum in real data without needing a full tool-calling agent loop
-  (this codebase's other LLM features — interview, practice, roadmap, gap
-  narrative — all use this same "gather context, then one structured-output
-  call" shape rather than a ReAct loop, for reliability).
-- Falls back to a deterministic curriculum (one module per priority skill)
-  if the LLM call fails, same retry-then-fallback pattern as everywhere else.
+Pipeline (gather → write → attach resources):
+1. Context is gathered from profile + gap + roadmap (same tool functions as
+   ``app.orchestrator.tools.learning``).
+2. One structured Mistral call writes in-app lessons (explanation, steps,
+   examples, mini-checks) tailored to that student — not generic blurbs.
+3. For each module skill, ``get_learning_resources_tool`` / 
+   ``build_resources_for_skill`` attaches real curated + search deep-links
+   (never LLM-invented URLs). Budget filters paid options.
+
+Falls back to a short deterministic skeleton if the LLM call fails.
 """
 
 from __future__ import annotations
 
 import re
-import uuid
 from functools import lru_cache
 from typing import Literal
 
@@ -34,16 +24,34 @@ from pydantic import BaseModel, Field
 
 from app.config import get_settings
 from app.db.models import StudentProfile
-from app.services.learning_resources import build_resources_for_skill
+from app.orchestrator.tools.learning import get_learning_resources_tool
 from app.services.llm_utils import call_structured
 from app.services.skills_catalog import normalize_skill, skills_for_role
 
 
+class MiniCheckDraft(BaseModel):
+    question: str = Field(description="A short self-check question the student answers in their head")
+    answer: str = Field(description="The correct answer/explanation, shown after the student checks their understanding")
+
+
 class LearningModuleDraft(BaseModel):
     title: str
-    description: str = Field(description="1-2 sentences: what this module covers and why it matters for the target role")
     skill: str = Field(description="The single skill this module teaches — must be one of the given priority/role skills")
     type: Literal["concept", "hands-on", "project"] = "concept"
+    explanation: str = Field(
+        description=(
+            "2-4 short paragraphs teaching this skill for THIS student's role and gap reason. "
+            "Be concrete: tools, commands, scenarios a junior hire in Nepal would face. "
+            "Do NOT write vague marketing copy like 'this module focuses on developing…'."
+        )
+    )
+    steps: list[str] = Field(description="3-5 concrete practice steps the student can do this week")
+    examples: list[str] = Field(
+        description="1-2 worked examples (commands, config snippets, or role-specific scenarios)"
+    )
+    mini_checks: list[MiniCheckDraft] = Field(
+        description="1-2 short self-check questions with answers"
+    )
 
 
 class LearningSectionDraft(BaseModel):
@@ -52,7 +60,7 @@ class LearningSectionDraft(BaseModel):
 
 
 class LearningCurriculumDraft(BaseModel):
-    summary: str = Field(description="2-3 sentence overview of this curriculum's focus and structure")
+    summary: str = Field(description="2-3 sentence overview tailored to this student's role and gaps")
     sections: list[LearningSectionDraft]
 
 
@@ -71,31 +79,90 @@ def _slugify(text: str, seen: set[str]) -> str:
 def _llm() -> ChatMistralAI:
     settings = get_settings()
     key = settings.mistral_api_key3 or settings.mistral_api_key2
-    return ChatMistralAI(model=settings.learning_mistral_model, temperature=0.3, api_key=key)
+    # Explicit max_tokens matters here: with it unset, Mistral's structured
+    # tool-call output was silently truncated mid-module for a curriculum
+    # this size (2-3 sections x 2-3 rich modules), which surfaces as a
+    # pydantic ValidationError (missing fields) that call_structured swallows
+    # into a fallback. 16000 gives enough headroom for the full curriculum.
+    return ChatMistralAI(
+        model=settings.learning_mistral_model, temperature=0.3, api_key=key, max_tokens=16000
+    )
 
 
-def _fallback_curriculum(priority_skills: list[dict], role_skills: list[str], budget: str | None) -> dict:
-    """Deterministic curriculum: one module per priority skill (or, if there
-    are none yet, the role's top catalog skills) — no LLM involved."""
+def _attach_resources(modules: list[dict], *, budget: str | None) -> None:
+    """Call the learning-resources tool once per module skill (deterministic)."""
+    for module in modules:
+        skill = module.get("skill") or ""
+        if not skill:
+            module["resources"] = []
+            continue
+        module["resources"] = get_learning_resources_tool.invoke(
+            {"skill": skill, "budget": budget or "free", "limit": 3}
+        )
+
+
+def _fallback_module(skill: str, seen_ids: set[str], *, budget: str | None = "free") -> dict:
+    module = {
+        "id": _slugify(skill, seen_ids),
+        "title": skill,
+        "skill": skill,
+        "type": "concept",
+        "explanation": (
+            f"This module covers {skill}. The full lesson couldn't be generated right now — "
+            f"start with the linked resources below, then regenerate for a complete in-app lesson."
+        ),
+        "steps": [
+            f"Open the top resource for {skill} and complete one section",
+            f"Note 3 ways {skill} shows up in your target role",
+            "Regenerate this curriculum for a full written lesson",
+        ],
+        "examples": [],
+        "mini_checks": [
+            {
+                "question": f"Can you explain {skill} in your own words?",
+                "answer": "Regenerate the curriculum for a model answer.",
+            }
+        ],
+    }
+    _attach_resources([module], budget=budget)
+    return module
+
+
+def _fallback_curriculum(
+    priority_skills: list[dict], role_skills: list[str], *, budget: str | None = "free"
+) -> dict:
+    """Deterministic curriculum: one placeholder module per priority skill."""
     names = [p["skill"] for p in priority_skills[:8]] or role_skills[:6]
     seen_ids: set[str] = set()
-    modules = []
-    for skill in names:
-        canonical = normalize_skill(skill) or skill
-        modules.append(
-            {
-                "id": _slugify(canonical, seen_ids),
-                "title": canonical,
-                "description": f"Build working knowledge of {canonical} for your target role.",
-                "skill": canonical,
-                "type": "concept",
-                "resources": build_resources_for_skill(canonical, budget=budget),
-            }
-        )
+    modules = [
+        _fallback_module(normalize_skill(skill) or skill, seen_ids, budget=budget)
+        for skill in names
+    ]
     return {
-        "summary": "A starter curriculum built from your top priority skills.",
+        "summary": "A starter curriculum from your top priority skills — regenerate for full lessons.",
         "sections": [{"id": "priority-skills", "title": "Priority Skills", "modules": modules}],
     }
+
+
+def _format_priority_block(priority_skills: list[dict]) -> str:
+    lines = []
+    for p in priority_skills[:10]:
+        skill = p.get("skill") or "?"
+        reason = (p.get("reason") or "").strip()
+        score = p.get("priority_score")
+        score_bit = f" (priority {score})" if score is not None else ""
+        if reason:
+            lines.append(f"- {skill}{score_bit}: {reason}")
+        else:
+            lines.append(f"- {skill}{score_bit}")
+    return "\n".join(lines) or "(none yet)"
+
+
+def _claimed_skills_line(profile: StudentProfile) -> str:
+    skills = profile.skills or []
+    if not skills:
+        return "(none listed)"
+    return ", ".join(str(s) for s in skills[:25])
 
 
 async def generate_curriculum(
@@ -105,11 +172,11 @@ async def generate_curriculum(
 ) -> dict:
     priority_skills = (gap_data or {}).get("priority_learn", [])
     role_skills = skills_for_role(profile.target_role)
+    budget = profile.budget or "free"
 
     if not priority_skills and not role_skills:
-        return _fallback_curriculum([], [], profile.budget)
+        return _fallback_curriculum([], [], budget=budget)
 
-    priority_names = ", ".join(p["skill"] for p in priority_skills[:10]) or "(none yet)"
     role_skill_names = ", ".join(role_skills[:20])
     roadmap_summary = ""
     if roadmap_skeleton and roadmap_skeleton.get("phases"):
@@ -117,21 +184,46 @@ async def generate_curriculum(
             f"- {p['title']}: {', '.join(p['skills'])}" for p in roadmap_skeleton["phases"][:6]
         )
 
+    experience = profile.years_of_experience
+    exp_label = f"{experience} years" if experience is not None else "not specified"
+    time_pw = profile.time_per_week or "not specified"
+    location = profile.location or "Nepal"
+
     prompt = (
-        "You are building a learning curriculum for a Nepali student preparing for a specific job role.\n"
-        "Organize it into 2-4 sections (e.g. Foundations, Core Skills, Advanced), each with 2-5 modules.\n"
-        "Each module teaches exactly ONE skill from the priority or role-skill lists below — do not invent "
-        "skills outside these lists, and do not write a URL or resource link (those are attached separately).\n"
-        "Prioritize the student's actual gap (priority skills) over generic role skills when both are given.\n\n"
+        "You are writing a personalized learning curriculum for ONE Nepali student. "
+        "Each module is an in-app lesson they read here; real external resources are "
+        "attached separately by the system — do NOT invent or list URLs.\n\n"
+        "RULES:\n"
+        "- Organize into 2-3 sections (e.g. Foundations, Core Skills, Role-Specific Gaps), "
+        "each with 2-3 modules. Depth over breadth.\n"
+        "- Each module teaches exactly ONE skill from the priority or role-skill lists — "
+        "do not invent skills outside these lists.\n"
+        "- Prioritize priority-gap skills over generic role skills.\n"
+        "- Tailor every explanation to THIS student's target role, experience level, "
+        "gap reason, and time budget. Use concrete DevOps/engineering scenarios when "
+        "the role is technical (standups, incident notes, PRs, pipelines, on-call).\n"
+        "- FORBIDDEN: vague filler like \"This module focuses on developing…\", "
+        "\"essential for collaborating…\", \"fundamentals which are essential…\". "
+        "Start teaching immediately with what to learn and why it matters for their role.\n"
+        "- For soft skills (e.g. Communication), teach role-specific practice: writing "
+        "clear Slack updates, incident summaries, PR descriptions — not generic soft-skill essays.\n"
+        "- For each module: 2-4 short teaching paragraphs, 3-5 doable steps, 1-2 worked "
+        "examples, 1-2 mini self-checks with answers.\n\n"
         f"Target role: {profile.target_role}\n"
-        f"Priority skills to close (ranked, most urgent first): {priority_names}\n"
+        f"Location: {location}\n"
+        f"Years of experience: {exp_label}\n"
+        f"Hours available per week: {time_pw}\n"
+        f"Budget for paid courses: {budget}\n"
+        f"Skills they already claim: {_claimed_skills_line(profile)}\n\n"
+        f"Priority skills to close (with WHY they matter for this student):\n"
+        f"{_format_priority_block(priority_skills)}\n\n"
         f"All catalog skills for this role: {role_skill_names}\n"
-        f"Existing roadmap (avoid pure duplication, complement it):\n{roadmap_summary or '(none yet)'}\n"
+        f"Existing roadmap (complement, don't duplicate):\n{roadmap_summary or '(none yet)'}\n"
     )
 
     result = await call_structured(_llm(), LearningCurriculumDraft, prompt)
     if result is None:
-        return _fallback_curriculum(priority_skills, role_skills, profile.budget)
+        return _fallback_curriculum(priority_skills, role_skills, budget=budget)
 
     seen_ids: set[str] = set()
     sections = []
@@ -145,16 +237,23 @@ async def generate_curriculum(
                 {
                     "id": _slugify(module.title, seen_ids),
                     "title": module.title,
-                    "description": module.description,
                     "skill": canonical,
                     "type": module.type,
-                    "resources": build_resources_for_skill(canonical, budget=profile.budget),
+                    "explanation": module.explanation,
+                    "steps": module.steps,
+                    "examples": module.examples,
+                    "mini_checks": [
+                        {"question": c.question, "answer": c.answer} for c in module.mini_checks
+                    ],
                 }
             )
         if modules:
-            sections.append({"id": _slugify(section.title, seen_ids), "title": section.title, "modules": modules})
+            _attach_resources(modules, budget=budget)
+            sections.append(
+                {"id": _slugify(section.title, seen_ids), "title": section.title, "modules": modules}
+            )
 
     if not sections:
-        return _fallback_curriculum(priority_skills, role_skills, profile.budget)
+        return _fallback_curriculum(priority_skills, role_skills, budget=budget)
 
     return {"summary": result.summary, "sections": sections}

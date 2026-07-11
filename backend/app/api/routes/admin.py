@@ -56,6 +56,26 @@ class ScrapeRequest(BaseModel):
     reingest_chroma: bool = True
 
 
+class ScrapeTriggerResponse(BaseModel):
+    scrape_run_id: uuid.UUID
+    status: str
+
+
+class SourceCompleteness(BaseModel):
+    source: str
+    jobs: int
+    skills_pct: int
+    salary_pct: int
+    location_pct: int
+    completeness: int
+
+
+class SourceRankingResponse(BaseModel):
+    scrape_run_id: uuid.UUID
+    scraped_at: datetime
+    ranking: list[SourceCompleteness]
+
+
 class ScrapeRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -104,7 +124,7 @@ async def _run_scrape_background(run_id: uuid.UUID, request: ScrapeRequest) -> N
                 await session.commit()
 
 
-@router.post("/scrape", status_code=202, dependencies=[Depends(require_admin)])
+@router.post("/scrape", response_model=ScrapeTriggerResponse, status_code=202, dependencies=[Depends(require_admin)])
 async def trigger_scrape(request: ScrapeRequest) -> dict:
     if request.sources:
         unknown = [s for s in request.sources if s not in SOURCES]
@@ -137,7 +157,7 @@ async def list_runs(limit: int = 20, db: AsyncSession = Depends(get_db)) -> list
     return list(result.scalars())
 
 
-@router.get("/scrape/sources/ranking", dependencies=[Depends(require_admin)])
+@router.get("/scrape/sources/ranking", response_model=SourceRankingResponse, dependencies=[Depends(require_admin)])
 async def source_ranking(db: AsyncSession = Depends(get_db)) -> dict:
     """Latest completed run's per-source completeness, best first."""
     result = await db.execute(
@@ -469,7 +489,13 @@ class VerificationUpdate(BaseModel):
     notes: str = ""
 
 
-@router.patch("/users/{profile_id}/verification", dependencies=[Depends(require_admin)])
+class VerificationOut(BaseModel):
+    status: Literal["verified", "needs_review", "flagged", "unreviewed"]
+    notes: str
+    updated_at: datetime
+
+
+@router.patch("/users/{profile_id}/verification", response_model=VerificationOut, dependencies=[Depends(require_admin)])
 async def update_verification(
     profile_id: uuid.UUID, payload: VerificationUpdate, db: AsyncSession = Depends(get_db)
 ) -> dict:

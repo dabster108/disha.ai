@@ -126,6 +126,47 @@ _CATALOG: dict[str, list[dict]] = {
     "digital marketing": [
         {"title": "Fundamentals of Digital Marketing", "url": "https://learndigital.withgoogle.com/digitalgarage/course/digital-marketing", "provider": "Google Digital Garage", "type": "course", "cost": "free", "duration": None},
     ],
+    "linux": [
+        {"title": "Linux Journey", "url": "https://linuxjourney.com/", "provider": "linuxjourney.com", "type": "docs", "cost": "free", "duration": None},
+        {"title": "Linux for Beginners — Full Course", "url": "https://www.youtube.com/watch?v=sWbUDq4S6Y8", "provider": "freeCodeCamp", "type": "video", "cost": "free", "duration": "5h 0m"},
+    ],
+    "bash": [
+        {"title": "Bash Scripting Tutorial", "url": "https://www.freecodecamp.org/news/shell-scripting-crash-course-how-to-write-bash-scripts-in-linux/", "provider": "freeCodeCamp", "type": "article", "cost": "free", "duration": None},
+        {"title": "Bash Scripting Full Course", "url": "https://www.youtube.com/watch?v=tK9Oc6AEnR4", "provider": "freeCodeCamp", "type": "video", "cost": "free", "duration": "1h 0m"},
+    ],
+    "ci/cd": [
+        {"title": "What is CI/CD? (GitLab Docs)", "url": "https://docs.gitlab.com/ee/ci/", "provider": "GitLab", "type": "docs", "cost": "free", "duration": None},
+        {"title": "CI/CD Pipeline Tutorial", "url": "https://www.youtube.com/watch?v=R8_veQiY664", "provider": "TechWorld with Nana", "type": "video", "cost": "free", "duration": "1h 0m"},
+    ],
+    "jenkins": [
+        {"title": "Jenkins User Documentation", "url": "https://www.jenkins.io/doc/", "provider": "jenkins.io", "type": "docs", "cost": "free", "duration": None},
+        {"title": "Jenkins Tutorial for Beginners", "url": "https://www.youtube.com/watch?v=6YZvp2GxZ0E", "provider": "freeCodeCamp", "type": "video", "cost": "free", "duration": "1h 30m"},
+    ],
+    "terraform": [
+        {"title": "Terraform Tutorials (HashiCorp)", "url": "https://developer.hashicorp.com/terraform/tutorials", "provider": "HashiCorp", "type": "docs", "cost": "free", "duration": None},
+        {"title": "Terraform Course — Beginner to Advanced", "url": "https://www.youtube.com/watch?v=7xngnjfIlK4", "provider": "freeCodeCamp", "type": "video", "cost": "free", "duration": "3h 0m"},
+    ],
+    "ansible": [
+        {"title": "Ansible Getting Started", "url": "https://docs.ansible.com/ansible/latest/getting_started/index.html", "provider": "ansible.com", "type": "docs", "cost": "free", "duration": None},
+        {"title": "Ansible for Beginners", "url": "https://www.youtube.com/watch?v=5hycyr-8EKs", "provider": "freeCodeCamp", "type": "video", "cost": "free", "duration": "3h 0m"},
+    ],
+    "nginx": [
+        {"title": "NGINX Beginner's Guide", "url": "https://nginx.org/en/docs/beginners_guide.html", "provider": "nginx.org", "type": "docs", "cost": "free", "duration": None},
+    ],
+    "prometheus": [
+        {"title": "Prometheus Getting Started", "url": "https://prometheus.io/docs/prometheus/latest/getting_started/", "provider": "prometheus.io", "type": "docs", "cost": "free", "duration": None},
+    ],
+    "grafana": [
+        {"title": "Grafana Fundamentals", "url": "https://grafana.com/tutorials/grafana-fundamentals/", "provider": "grafana.com", "type": "docs", "cost": "free", "duration": None},
+    ],
+    "communication": [
+        {"title": "Technical Writing One (Google)", "url": "https://developers.google.com/tech-writing/one", "provider": "Google Developers", "type": "course", "cost": "free", "duration": None},
+        {"title": "How to Communicate Effectively at Work", "url": "https://www.youtube.com/watch?v=HAnw168huqA", "provider": "Harvard Business Review", "type": "video", "cost": "free", "duration": "10m"},
+    ],
+    "devops": [
+        {"title": "DevOps Roadmap Overview", "url": "https://roadmap.sh/devops", "provider": "roadmap.sh", "type": "docs", "cost": "free", "duration": None},
+        {"title": "DevOps Engineering Course", "url": "https://www.youtube.com/watch?v=j5Zsaek5JZI", "provider": "freeCodeCamp", "type": "video", "cost": "free", "duration": "3h 0m"},
+    ],
 }
 
 

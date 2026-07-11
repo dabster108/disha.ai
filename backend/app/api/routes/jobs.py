@@ -129,7 +129,30 @@ class SyntheticEvalRequest(BaseModel):
     sample_n: int = Field(default=500, ge=10, le=5000)
 
 
-@router.post("/synthetic-recommend")
+class SyntheticJobMatch(BaseModel):
+    job_id: str
+    job_requirements: str
+    our_score: float
+    dataset_match_score: float | None
+    dataset_recommended: bool
+    matched_skills: list[str]
+    missing_skills: list[str]
+    explanation: str
+
+
+class SyntheticRecommendResponse(BaseModel):
+    matches: list[SyntheticJobMatch]
+    reason: str | None = None
+
+
+class SyntheticEvalResponse(BaseModel):
+    sample_size: int
+    mae: float | None
+    precision_when_recommended: float | None
+    note: str
+
+
+@router.post("/synthetic-recommend", response_model=SyntheticRecommendResponse)
 async def synthetic_recommend(payload: SyntheticRecommendRequest) -> dict:
     try:
         return synthetic_recommender.recommend(payload.skills, top_k=payload.top_k)
@@ -137,7 +160,7 @@ async def synthetic_recommend(payload: SyntheticRecommendRequest) -> dict:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
-@router.post("/synthetic-eval")
+@router.post("/synthetic-eval", response_model=SyntheticEvalResponse)
 async def synthetic_eval(payload: SyntheticEvalRequest) -> dict:
     try:
         return synthetic_recommender.evaluate(sample_n=payload.sample_n)

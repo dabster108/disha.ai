@@ -18,12 +18,19 @@ T = TypeVar("T", bound=BaseModel)
 
 
 async def call_structured(llm: BaseChatModel, schema: type[T], prompt: str, *, attempts: int = 2) -> T | None:
-    """Invoke ``llm`` for ``schema``, retrying once. Returns None if all attempts fail."""
+    """Invoke ``llm`` for ``schema``, retrying once. Returns None if all attempts fail.
+
+    A failed attempt is either a raised exception (malformed tool call) or a
+    clean ``None`` return (the model responded without calling the tool at
+    all) — both are retried the same way, since either can happen on an
+    otherwise-healthy request and a second attempt usually succeeds.
+    """
     structured = llm.with_structured_output(schema)
     for attempt in range(attempts):
         try:
-            return await structured.ainvoke(prompt)
+            result = await structured.ainvoke(prompt)
         except Exception:
-            if attempt == attempts - 1:
-                return None
+            result = None
+        if result is not None:
+            return result
     return None
