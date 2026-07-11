@@ -33,8 +33,7 @@ export default function AdminSkillsPage() {
         <div>
           <h1 className="text-display-lg text-on-surface">Skills Catalog</h1>
           <p className="mt-1 text-body-md text-secondary">
-            v{catalog.version} • {catalog.all_skills.length} unique skills across {Object.keys(catalog.roles).length} roles
-            (read-only — edit <code>app/data/skills_catalog.json</code>)
+            v{catalog.version} • {catalog.all_skills.length} skills · {Object.keys(catalog.roles).length} roles
           </p>
         </div>
         <input

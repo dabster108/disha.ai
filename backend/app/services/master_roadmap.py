@@ -306,6 +306,85 @@ def _load_json_file(path_str: str, mtime_ns: int) -> MasterRoadmapDocument:
     return doc
 
 
+def clear_master_roadmap_cache() -> None:
+    _load_json_file.cache_clear()
+
+
+def validate_master_document(raw: dict) -> MasterRoadmapDocument:
+    """Validate structure + dependency DAG. Raises ValueError on failure."""
+    doc = MasterRoadmapDocument.model_validate(raw)
+    validate_dependency_dag(doc.phases)
+    seen_ids: set[str] = set()
+    for phase in doc.phases:
+        for node in phase.nodes:
+            if node.id in seen_ids:
+                raise ValueError(f"Duplicate node id: {node.id!r}")
+            seen_ids.add(node.id)
+            if not normalize_skill_name(node.skill):
+                raise ValueError(f"Empty skill on node {node.id!r}")
+    return doc
+
+
+def save_master_document(role_key: str, raw: dict, *, create_only: bool = False) -> MasterRoadmapDocument:
+    """Validate and write master roadmap JSON to disk."""
+    if not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", role_key or ""):
+        raise ValueError(f"Invalid role_key: {role_key!r}")
+    doc = validate_master_document(raw)
+    if doc.role_key != role_key:
+        raise ValueError(f"Document role_key {doc.role_key!r} does not match URL {role_key!r}")
+
+    ROADMAPS_DIR.mkdir(parents=True, exist_ok=True)
+    path = ROADMAPS_DIR / f"{role_key}.json"
+    if create_only and path.is_file():
+        raise ValueError(f"Master roadmap already exists: {role_key!r}")
+    path.write_text(json.dumps(doc.model_dump(), indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    clear_master_roadmap_cache()
+    return doc
+
+
+def scaffold_master_document(role_key: str, role: str, summary: str | None = None) -> MasterRoadmapDocument:
+    """Minimal starter template for a new master roadmap."""
+    if role_key in _ROLE_REGISTRY and FOUNDATIONAL_LADDERS.get(_ROLE_REGISTRY[role_key][1]):
+        display, category = _ROLE_REGISTRY[role_key]
+        return build_master_document_from_ladder(role_key, role or display, FOUNDATIONAL_LADDERS[category])
+    return MasterRoadmapDocument(
+        schema_version=1,
+        roadmap_version=f"{role_key}-v1",
+        role=role,
+        role_key=role_key,
+        role_aliases=[role],
+        summary=summary or f"Full {role} path from zero to job-ready.",
+        phases=[
+            MasterRoadmapPhase(
+                id="foundations",
+                title="Foundations",
+                milestones=["Complete foundation skills"],
+                nodes=[
+                    MasterRoadmapNode(
+                        id="getting-started",
+                        skill="Getting Started",
+                        title="Getting Started",
+                        description=f"Start your {role} learning path.",
+                        order=1,
+                        dependencies=[],
+                        estimated_hours=6.0,
+                        suggested_projects=[f"Build a small {role} starter project"],
+                        difficulty="beginner",
+                    )
+                ],
+            )
+        ],
+    )
+
+
+def list_master_roadmap_registry() -> list[dict[str, str]]:
+    """Known role keys for admin scaffold picker."""
+    return [
+        {"role_key": key, "role": display, "has_json": (ROADMAPS_DIR / f"{key}.json").is_file()}
+        for key, (display, _) in _ROLE_REGISTRY.items()
+    ]
+
+
 def load_master_document(role_key: str) -> MasterRoadmapDocument:
     path = ROADMAPS_DIR / f"{role_key}.json"
     if path.is_file():

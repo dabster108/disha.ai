@@ -32,8 +32,14 @@ export default function AdminRoadmapsPage() {
   return (
     <div className="mx-auto max-w-5xl space-y-6">
       <header>
-        <h1 className="text-display-lg text-on-surface">Roadmaps</h1>
-        <p className="mt-1 text-body-md text-secondary">{roadmaps.length} roadmaps across all students.</p>
+        <h1 className="text-display-lg text-on-surface">Student Roadmaps</h1>
+        <p className="mt-1 text-body-md text-secondary">
+          Per-student generated plans in the database. Edit role templates under{" "}
+          <Link href="/admin/master-roadmaps" className="font-medium text-primary hover:underline">
+            Master Roadmaps
+          </Link>
+          .
+        </p>
       </header>
 
       <div className="overflow-x-auto rounded-2xl border border-outline-variant bg-white">

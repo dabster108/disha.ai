@@ -70,6 +70,14 @@ export default function MarketingFooter() {
                   Careers
                 </Link>
               </li>
+              <li>
+                <Link
+                  href="/admin"
+                  className="text-label-sm text-secondary transition-colors hover:text-on-surface"
+                >
+                  Admin
+                </Link>
+              </li>
             </ul>
           </div>
         </div>

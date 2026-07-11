@@ -12,15 +12,9 @@ import logo from "@/components/images/logo.png";
 const NAV = [
   { href: "/admin", label: "Overview", icon: "dashboard" },
   { href: "/admin/users", label: "Users", icon: "group" },
-  { href: "/admin/interviews", label: "Interviews", icon: "record_voice_over" },
-  { href: "/admin/practice", label: "Practice", icon: "sports_esports" },
-  { href: "/admin/gaps", label: "Skill Gaps", icon: "insights" },
-  { href: "/admin/roadmaps", label: "Roadmaps", icon: "route" },
-  { href: "/admin/learning", label: "Learning", icon: "menu_book" },
+  { href: "/admin/master-roadmaps", label: "Master Roadmaps", icon: "account_tree" },
   { href: "/admin/scrape", label: "Scrape", icon: "cloud_sync" },
-  { href: "/admin/jobs", label: "Jobs Corpus", icon: "work" },
-  { href: "/admin/leaderboard", label: "Leaderboard", icon: "leaderboard" },
-  { href: "/admin/skills", label: "Skills Catalog", icon: "school" },
+  { href: "/admin/jobs", label: "Jobs", icon: "work" },
 ];
 
 function ConfigWarning({ title, children }) {
@@ -91,7 +85,9 @@ export default function AdminLayout({ children }) {
 
         <nav className="flex-1 space-y-1 overflow-y-auto">
           {NAV.map((item) => {
-            const active = pathname === item.href;
+            const active =
+              pathname === item.href ||
+              (item.href !== "/admin" && pathname.startsWith(`${item.href}/`));
             return (
               <Link
                 key={item.href}

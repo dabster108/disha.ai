@@ -32,6 +32,15 @@ from app.db.models import (
 from app.api.routes.interview import InterviewSessionOut
 from app.db.session import async_session_factory
 from app.services.job_matching import rank_jobs_for_student
+from app.services.master_roadmap import (
+    MasterRoadmapDocument,
+    list_available_roadmaps,
+    list_master_roadmap_registry,
+    load_master_document,
+    save_master_document,
+    scaffold_master_document,
+    validate_master_document,
+)
 from app.services.roadmap import compute_roadmap_progress_pct
 from app.services.skill_gap import load_gap_context
 from scraper.scraper import MODES, SOURCES
@@ -762,3 +771,117 @@ async def admin_list_learning(
         )
         for c in curricula
     ]
+
+
+# ---------------------------------------------------------------------------
+# Master roadmap JSON (filesystem templates — not per-student DB rows)
+# ---------------------------------------------------------------------------
+
+
+class MasterRoadmapSummary(BaseModel):
+    role_key: str
+    role: str
+    roadmap_version: str
+    phase_count: int
+    node_count: int
+    source: str
+
+
+class MasterRoadmapValidateResponse(BaseModel):
+    valid: bool
+    role_key: str
+    phase_count: int
+    node_count: int
+
+
+class MasterRoadmapScaffoldRequest(BaseModel):
+    role_key: str
+    role: str
+    summary: str | None = None
+
+
+class MasterRoadmapRegistryEntry(BaseModel):
+    role_key: str
+    role: str
+    has_json: bool
+
+
+@router.get("/master-roadmaps", response_model=list[MasterRoadmapSummary], dependencies=[Depends(require_admin)])
+async def admin_list_master_roadmaps() -> list[MasterRoadmapSummary]:
+    return [MasterRoadmapSummary(**row) for row in list_available_roadmaps()]
+
+
+@router.get(
+    "/master-roadmaps/registry",
+    response_model=list[MasterRoadmapRegistryEntry],
+    dependencies=[Depends(require_admin)],
+)
+async def admin_master_roadmap_registry() -> list[MasterRoadmapRegistryEntry]:
+    return [MasterRoadmapRegistryEntry(**row) for row in list_master_roadmap_registry()]
+
+
+@router.post(
+    "/master-roadmaps/scaffold",
+    response_model=MasterRoadmapDocument,
+    dependencies=[Depends(require_admin)],
+)
+async def admin_scaffold_master_roadmap(payload: MasterRoadmapScaffoldRequest) -> MasterRoadmapDocument:
+    try:
+        return scaffold_master_document(payload.role_key, payload.role, payload.summary)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/master-roadmaps/validate",
+    response_model=MasterRoadmapValidateResponse,
+    dependencies=[Depends(require_admin)],
+)
+async def admin_validate_master_roadmap(payload: dict) -> MasterRoadmapValidateResponse:
+    try:
+        doc = validate_master_document(payload)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return MasterRoadmapValidateResponse(
+        valid=True,
+        role_key=doc.role_key,
+        phase_count=len(doc.phases),
+        node_count=sum(len(p.nodes) for p in doc.phases),
+    )
+
+
+@router.get(
+    "/master-roadmaps/{role_key}",
+    response_model=MasterRoadmapDocument,
+    dependencies=[Depends(require_admin)],
+)
+async def admin_get_master_roadmap(role_key: str) -> MasterRoadmapDocument:
+    try:
+        return load_master_document(role_key)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.put(
+    "/master-roadmaps/{role_key}",
+    response_model=MasterRoadmapDocument,
+    dependencies=[Depends(require_admin)],
+)
+async def admin_put_master_roadmap(role_key: str, payload: dict) -> MasterRoadmapDocument:
+    try:
+        return save_master_document(role_key, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+
+@router.post(
+    "/master-roadmaps/{role_key}",
+    response_model=MasterRoadmapDocument,
+    dependencies=[Depends(require_admin)],
+)
+async def admin_create_master_roadmap(role_key: str, payload: dict) -> MasterRoadmapDocument:
+    try:
+        return save_master_document(role_key, payload, create_only=True)
+    except ValueError as exc:
+        status = 409 if "already exists" in str(exc) else 422
+        raise HTTPException(status_code=status, detail=str(exc)) from exc

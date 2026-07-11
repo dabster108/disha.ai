@@ -80,3 +80,30 @@ export const getAdminGaps = (opts = {}) => adminFetch(withProfileFilter("/api/ad
 export const getAdminRoadmaps = (opts = {}) => adminFetch(withProfileFilter("/api/admin/roadmaps", opts));
 
 export const getAdminLearning = (opts = {}) => adminFetch(withProfileFilter("/api/admin/learning", opts));
+
+export const getMasterRoadmaps = () => adminFetch("/api/admin/master-roadmaps");
+
+export const getMasterRoadmap = (roleKey) => adminFetch(`/api/admin/master-roadmaps/${encodeURIComponent(roleKey)}`);
+
+export const saveMasterRoadmap = (roleKey, doc) =>
+  adminFetch(`/api/admin/master-roadmaps/${encodeURIComponent(roleKey)}`, {
+    method: "PUT",
+    json: doc,
+  });
+
+export const createMasterRoadmap = (roleKey, doc) =>
+  adminFetch(`/api/admin/master-roadmaps/${encodeURIComponent(roleKey)}`, {
+    method: "POST",
+    json: doc,
+  });
+
+export const scaffoldMasterRoadmap = ({ role_key, role, summary }) =>
+  adminFetch("/api/admin/master-roadmaps/scaffold", {
+    method: "POST",
+    json: { role_key, role, summary: summary || null },
+  });
+
+export const getMasterRoadmapRegistry = () => adminFetch("/api/admin/master-roadmaps/registry");
+
+export const validateMasterRoadmap = (doc) =>
+  adminFetch("/api/admin/master-roadmaps/validate", { method: "POST", json: doc });
